@@ -5,18 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/eagleusb/go-raspbibi/internal/mover"
-	"github.com/eagleusb/go-raspbibi/internal/utility"
 )
-
-var allowedExtensions = []string{".mkv", ".mp4"}
-
-var skipPatterns = []utility.Pattern{
-	utility.NewPattern(`(?i).*S[0-9][0-9].*`),
-}
 
 func init() {
 	features["mover"] = runMover
@@ -47,98 +38,14 @@ func runMover(ctx context.Context) {
 		os.Exit(1)
 	}
 
-	// Ensure target directory exists
-	if *dryRun {
-		fmt.Printf("[DRY-RUN] Would create directory: %s\n", *dst)
-	} else {
-		if err := os.MkdirAll(*dst, 0755); err != nil {
-			panic(err)
-		}
+	cfg := mover.Config{
+		Src:    *src,
+		Dst:    *dst,
+		Algo:   *algo,
+		DryRun: *dryRun,
 	}
 
-	err := filepath.WalkDir(*src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		// Check if shutdown was requested
-		if ctx.Err() != nil {
-			fmt.Println("Stopping file processing (cancelled)...")
-			return ctx.Err()
-		}
-
-		// Filter by extension
-		ext := strings.ToLower(filepath.Ext(path))
-		if !utility.HasExtension(ext, allowedExtensions) {
-			if *dryRun {
-				fmt.Printf("[DRY-RUN] Ignored (unsupported extension %s): %s\n", ext, d.Name())
-			}
-			return nil
-		}
-
-		filename := d.Name()
-		base := strings.TrimSuffix(filename, ext)
-
-		// Skip files matching any skip pattern
-		if utility.MatchAny(filename, skipPatterns) {
-			if *dryRun {
-				fmt.Printf("[DRY-RUN] Would skip (matches pattern): %s\n", filename)
-			} else {
-				fmt.Printf("Skipping (matches pattern): %s\n", filename)
-			}
-			return nil
-		}
-
-		// Sanitize filename
-		finalName := utility.FilterUnicode(utility.ReplaceCharacters(base)) + ext
-		destPath := filepath.Join(*dst, finalName)
-
-		// Check if destination already exists
-		exists, match, err := mover.ExistsAndMatches(path, destPath, *algo)
-		if err != nil {
-			fmt.Printf("Error checking destination %s: %v\n", destPath, err)
-		}
-
-		if exists && match && err == nil {
-			if *dryRun {
-				fmt.Printf("[DRY-RUN] Would skip (identical): %s -> %s\n", filename, destPath)
-			} else {
-				fmt.Printf("Skipping (identical): %s -> %s\n", filename, destPath)
-				os.Remove(path)
-			}
-			return nil
-		}
-
-		if exists && !match && err == nil {
-			if *dryRun {
-				fmt.Printf("[DRY-RUN] Would overwrite (content differs): %s -> %s\n", filename, destPath)
-			} else {
-				fmt.Printf("Overwriting (content differs): %s -> %s\n", filename, destPath)
-			}
-		}
-
-		if *dryRun {
-			fmt.Printf("[DRY-RUN] Would move: %s -> %s\n", filename, destPath)
-		} else {
-			fmt.Printf("Moving: %s -> %s\n", filename, destPath)
-			if err := mover.MoveFile(ctx, path, destPath); err != nil {
-				fmt.Printf("Error moving %s: %v\n", filename, err)
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil && err != context.Canceled {
+	if err := mover.Run(ctx, cfg); err != nil {
 		fmt.Printf("Error: %v\n", err)
-	}
-
-	if *dryRun {
-		fmt.Println("File processing completed (dry-run)")
-	} else {
-		fmt.Println("File processing completed")
 	}
 }
