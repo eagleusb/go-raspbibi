@@ -9,11 +9,11 @@ import (
 func ReplaceCharacters(name string) string {
 	replacer := strings.NewReplacer(
 		" ", ".",
-		"(", ".",
-		")", ".",
-		"[", ".",
-		"]", ".",
-		",", " ",
+		"(", "",
+		")", "",
+		"[", "",
+		"]", "",
+		",", "",
 	)
 	return replacer.Replace(name)
 }

@@ -27,6 +27,7 @@ func runMover(ctx context.Context) {
 	src := fs.String("src", ".", "Source directory")
 	dst := fs.String("dst", "/mnt/sdb/movies-hd", "Destination directory")
 	dryRun := fs.Bool("dry-run", false, "Show what would happen without actually moving files")
+	algo := fs.String("algo", "sampling", "Checksum algorithm: sampling (default) or full")
 	fs.Parse(os.Args[1:])
 
 	if fs.NArg() > 0 {
@@ -36,6 +37,12 @@ func runMover(ctx context.Context) {
 	}
 
 	if *src == "" || *dst == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	if *algo != "sampling" && *algo != "full" {
+		fmt.Printf("Invalid algo %q, must be 'sampling' or 'full'\n", *algo)
 		fs.Usage()
 		os.Exit(1)
 	}
@@ -89,11 +96,35 @@ func runMover(ctx context.Context) {
 		finalName := utility.FilterUnicode(utility.ReplaceCharacters(base)) + ext
 		destPath := filepath.Join(*dst, finalName)
 
+		// Check if destination already exists
+		exists, match, err := mover.ExistsAndMatches(path, destPath, *algo)
+		if err != nil {
+			fmt.Printf("Error checking destination %s: %v\n", destPath, err)
+		}
+
+		if exists && match && err == nil {
+			if *dryRun {
+				fmt.Printf("[DRY-RUN] Would skip (identical): %s -> %s\n", filename, destPath)
+			} else {
+				fmt.Printf("Skipping (identical): %s -> %s\n", filename, destPath)
+				os.Remove(path)
+			}
+			return nil
+		}
+
+		if exists && !match && err == nil {
+			if *dryRun {
+				fmt.Printf("[DRY-RUN] Would overwrite (content differs): %s -> %s\n", filename, destPath)
+			} else {
+				fmt.Printf("Overwriting (content differs): %s -> %s\n", filename, destPath)
+			}
+		}
+
 		if *dryRun {
 			fmt.Printf("[DRY-RUN] Would move: %s -> %s\n", filename, destPath)
 		} else {
 			fmt.Printf("Moving: %s -> %s\n", filename, destPath)
-			if err := mover.MoveFile(path, destPath); err != nil {
+			if err := mover.MoveFile(ctx, path, destPath); err != nil {
 				fmt.Printf("Error moving %s: %v\n", filename, err)
 			}
 		}
