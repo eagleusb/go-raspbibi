@@ -4,15 +4,11 @@
   <img width="600" height="600" alt="raspbibi-600-600" src="https://github.com/user-attachments/assets/5a1550d9-a75f-489e-92b3-912c7dc8a073" />
 </p>
 
-## Transmission routing hook
+## Transmission
 
-`raspbibi transmission-route` chooses a torrent's download directory from its
-name. It reads Transmission's `TR_TORRENT_NAME`, `TR_TORRENT_HASH`, and
-`TR_TORRENT_DIR` hook environment variables and asks Transmission to relocate
-the torrent using RPC. It does not rename files or use the standalone `mover`
-feature, so Transmission keeps track of its data for downloading and seeding.
-
-The supplied configuration uses these rules, in order:
+`raspbibi transmission-route` reads `TR_TORRENT_NAME`, `TR_TORRENT_HASH`, and
+`TR_TORRENT_DIR` from Transmission's hook environment and asks Transmission to
+move the torrent via RPC. The first matching rule wins.
 
 | Match | Destination |
 | --- | --- |
@@ -21,41 +17,31 @@ The supplied configuration uses these rules, in order:
 | A year such as `1999` or `2024` | `/mnt/sdb/movies-hd` |
 | No matching rule | Keep the existing download folder |
 
-The show-specific rule comes before the general series and movie rules. Each
-`?` in the show pattern represents exactly one digit: `S01E02` matches, while
-`S10E02` and `S01E123` use the general series rule. The title's dots are literal,
-the title must start the torrent name, and release suffixes such as `.1080p`
-are allowed after the episode number.
+The show pattern matches from the start of the name, with literal dots and one
+digit per `?`. It accepts suffixes such as `.1080p` after `S01E02`. `S10E02`
+and `S01E123` use the general series rule.
 
-The first match wins. Edit `examples/transmission-route.json` to match your
-naming conventions: years are only a movie heuristic, and daily episodes,
-anime, and titles without years may need more specific rules. Put custom
-exceptions before series and movies. Any rule with an omitted or empty
-`destination` keeps that torrent in its existing folder, even if a later rule
-would match. Paths must be absolute; Unicode paths are supported. There is no
-fallback relocation for unknown torrents.
+Edit `examples/transmission-route.json` to put exceptions before the general
+series and year rules. Use absolute paths. Unicode is supported. A matching rule
+with an empty or omitted `destination` keeps the current folder.
 
-### Build and install on Raspbian / Debian
+### Build and install
 
-Build with Go 1.26 or newer. For a native build:
+Use Go 1.26 or newer. Choose the build command for the OS installed on the Pi.
 
 ```sh
+# Native build
 CGO_ENABLED=0 go build -tags osusergo -o bin/raspbibi .
-```
 
-For cross compilation, choose the target for your **installed OS**, rather
-than just the Raspberry Pi model:
-
-```sh
-# 64-bit Raspberry Pi OS
+# Cross-compile for 64-bit Raspberry Pi OS
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags osusergo -o bin/raspbibi-arm64 .
 
-# 32-bit Raspbian on an ARMv7-compatible Pi
+# Cross-compile for 32-bit Raspbian on an ARMv7-compatible Pi
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags osusergo -o bin/raspbibi-armv7 .
 ```
 
-Install the appropriate binary on the Pi (substitute its filename below if
-cross compiled):
+On the Pi, install the binary, routing config, and hook launcher. Substitute
+the binary filename if you cross-compiled.
 
 ```sh
 sudo install -m 0755 bin/raspbibi /usr/local/bin/raspbibi
@@ -64,18 +50,14 @@ sudo install -m 0644 examples/transmission-route.json /etc/raspbibi/transmission
 sudo install -m 0755 examples/transmission-route-hook.sh /usr/local/bin/raspbibi-transmission-route
 ```
 
-All configured destination directories must already exist on the mounted
-disks and be writable by the Transmission service account (often
-`debian-transmission`). The hook refuses a missing destination instead of
-creating it. This does not verify that a disk is mounted: ensure the mounts are
-available before starting Transmission.
+Before starting Transmission, mount the disks and make sure the destination
+directories exist and are writable by the service account (often
+`debian-transmission`).
 
-### Enable the added hook in Transmission 4.1.0 beta2
-
-Stop Transmission before editing its existing `settings.json`. On a typical
-Debian daemon installation this is `/etc/transmission-daemon/settings.json`;
-some installations instead use a file under `/var/lib/transmission-daemon`.
-Merge these entries into that file, preserving its other settings:
+To enable the hook in Transmission 4.1.0 beta2, run
+`sudo systemctl stop transmission-daemon`, then merge these entries into the
+existing `settings.json` with `sudoedit`. On Debian, the file is usually
+`/etc/transmission-daemon/settings.json` or under `/var/lib/transmission-daemon`.
 
 ```json
 "rpc-enabled": true,
@@ -83,51 +65,36 @@ Merge these entries into that file, preserving its other settings:
 "script-torrent-added-filename": "/usr/local/bin/raspbibi-transmission-route"
 ```
 
-For a systemd daemon:
+The default RPC endpoint is `http://127.0.0.1:9091/transmission/rpc`. Set
+`rpc_url` in the routing config to use another endpoint, or set
+`RASPBIBI_TRANSMISSION_CONFIG` in the service environment to select another
+config file.
 
-```sh
-sudo systemctl stop transmission-daemon
-sudoedit /etc/transmission-daemon/settings.json
-sudo systemctl start transmission-daemon
-```
-
-The small shell launcher is required because Transmission's hook setting takes
-only an executable filename. All matching and RPC logic runs in Go. You may
-set `RASPBIBI_TRANSMISSION_CONFIG` in the service environment to choose another
-configuration file. With the GTK client, close the app and edit its settings
-(typically `~/.config/transmission/settings.json`), then reopen it; enable its
-local RPC server as well.
-
-The default RPC URL is `http://127.0.0.1:9091/transmission/rpc`; change
-`rpc_url` in the routing configuration if the daemon uses another endpoint.
-This implementation uses the legacy RPC protocol supported by **4.1.0 beta2**,
-including the HTTP 409 session-token handshake. No `transmission-remote`
-installation or additional Go dependency is required. Existing RPC access
-controls still apply.
-
-If RPC authentication is enabled, set `TRANSMISSION_RPC_USERNAME` and
-`TRANSMISSION_RPC_PASSWORD` in the Transmission service's environment so the
-hook inherits them. For systemd, create a root-readable environment file such
-as `/etc/raspbibi/transmission-rpc.env` with mode `0600`:
+If RPC authentication is enabled, create a root-owned
+`/etc/raspbibi/transmission-rpc.env` with mode `0600`. Use the original password
+because Transmission saves `rpc-password` as a salted hash.
 
 ```ini
 TRANSMISSION_RPC_USERNAME=your-user
 TRANSMISSION_RPC_PASSWORD=your-password
 ```
 
-Use `sudo systemctl edit transmission-daemon` to add:
+Run `sudo systemctl edit transmission-daemon` and add the environment file.
 
 ```ini
 [Service]
 EnvironmentFile=/etc/raspbibi/transmission-rpc.env
 ```
 
-Restart the service after changing its environment. Do not put credentials in
-`rpc_url` or commit them with the routing rules.
+Run `sudo systemctl start transmission-daemon` after setup. Restart the service
+after later changes to its environment.
+
+For GTK, close the app, merge the same settings into its `settings.json`
+(typically `~/.config/transmission/settings.json`), and reopen it.
 
 ### Preview and behavior
 
-Preview the routing decision without making RPC requests or filesystem changes:
+Use `-dry-run` to preview the destination without moving data or calling RPC.
 
 ```sh
 TR_TORRENT_NAME='Example.Show.S01E02.1080p' \
@@ -135,38 +102,47 @@ TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
 ./bin/raspbibi transmission-route -config examples/transmission-route.json -dry-run
 ```
 
-The hook applies to newly added torrents, not the existing queue. In beta2 it
-runs once metadata is available, including for magnet links. Relocation uses
-`torrent-set-location` with `move: true`, scoped to that torrent's info hash.
-On success it prints **Requested relocation**: RPC acceptance does not confirm
-that a potentially long disk move has finished. Inspect Transmission for the
-final location or move errors. The request timeout defaults to 30 seconds and
-can be changed with `-timeout 2m`. A timeout can leave the outcome uncertain;
-check Transmission before retrying.
+- The hook runs for newly added torrents once metadata is available, including
+  magnet links. It skips torrents already at the matching destination.
+- The hook calls `torrent-set-location` with `move: true` for the torrent's
+  info hash. Partial data moves immediately, even with an incomplete directory
+  configured. Active torrents resume after a successful move. Paused torrents
+  stay paused.
+- **Requested relocation** means Transmission accepted the request. Check
+  Transmission for the final location or move errors, especially before retrying
+  after a timeout. RPC requests time out after 30 seconds by default. Use
+  `-timeout 2m` to override it.
+- Check the service logs if the hook exits nonzero for configuration,
+  destination, authentication, or RPC errors.
 
-Transmission can briefly interrupt uploading while moving data; after a
-successful move an active torrent continues automatically. A move failure can
-stop the torrent. Explicitly paused torrents are not started by the hook.
-Relocation also overrides Transmission's incomplete-directory setting: partial
-data moves into the category directory immediately. Unknown torrents and any
-explicit keep-in-place rules retain their current location, including any
-manually chosen folder.
-An already matching `TR_TORRENT_DIR` is skipped.
+## Chown
 
-The hook exits nonzero for invalid configuration, missing hook variables,
-unavailable destinations, authentication failures, or RPC errors. Check the
-service logs and Transmission's own status when troubleshooting.
-
-### Validation
+`raspbibi chown` recursively changes ownership of a directory and its contents.
+It skips entries that already have the requested owner and group.
 
 ```sh
-go fmt ./...
-go fix ./...
-CGO_ENABLED=0 go test -tags osusergo ./...
-CGO_ENABLED=0 go vet -tags osusergo ./...
+raspbibi chown -path /srv/media -user jellyfin -group jellyfin -dry-run
 ```
 
-Protocol and hook behavior are based on Transmission's
-[beta2 RPC specification](https://github.com/transmission/transmission/blob/4.1.0-beta.2/docs/rpc-spec.md),
-[beta2 configuration documentation](https://github.com/transmission/transmission/blob/4.1.0-beta.2/docs/Editing-Configuration-Files.md),
-and [beta2 hook implementation](https://github.com/transmission/transmission/blob/4.1.0-beta.2/libtransmission/torrent.cc).
+`-path` defaults to the current directory, `-user` defaults to `jellyfin`, and
+`-group` defaults to a group with the same name as `-user`. Remove `-dry-run` to
+apply the changes and use `sudo` if needed.
+
+## Mover
+
+`raspbibi mover` scans a source directory recursively for `.mkv` and `.mp4`
+files (case-insensitive) and skips names containing a marker such as `S01`.
+It moves files directly into the destination and sanitizes names, for example
+`Movie Name (2024).mkv` becomes `Movie.Name.2024.mkv`.
+
+```sh
+raspbibi mover -src /mnt/sda/downloads -dst /mnt/sdb/movies-hd -dry-run
+```
+
+`-src` defaults to the current directory and `-dst` to `/mnt/sdb/movies-hd`.
+Remove `-dry-run` to apply the moves. Keep the destination outside the source
+tree so the mover cannot mistake a source file for its own duplicate.
+
+On a name collision, the mover compares file sizes and checksums. It deletes
+the source if they match and overwrites the destination if they differ.
+`-algo sampling` is the default. Use `-algo full` to checksum entire files.
