@@ -16,10 +16,16 @@ The supplied configuration uses these rules, in order:
 
 | Match | Destination |
 | --- | --- |
-| A `custom` word marker (case insensitive) | Keep the existing download folder |
-| Series markers such as `S01E02`, `S02`, or `1x02` | `/mnt/sda/séries` |
+| `Plus.belle.la.vie.encore.plus.belle.S0?E??` (case insensitive) | `/mnt/sdb/mylen/Plus.belle.la.vie.encore.plus.belle` |
+| Series markers such as `S01E02`, `S02`, or `1x02` | `/mnt/sda/series` |
 | A year such as `1999` or `2024` | `/mnt/sdb/movies-hd` |
 | No matching rule | Keep the existing download folder |
+
+The show-specific rule comes before the general series and movie rules. Each
+`?` in the show pattern represents exactly one digit: `S01E02` matches, while
+`S10E02` and `S01E123` use the general series rule. The title's dots are literal,
+the title must start the torrent name, and release suffixes such as `.1080p`
+are allowed after the episode number.
 
 The first match wins. Edit `examples/transmission-route.json` to match your
 naming conventions: years are only a movie heuristic, and daily episodes,
@@ -58,7 +64,7 @@ sudo install -m 0644 examples/transmission-route.json /etc/raspbibi/transmission
 sudo install -m 0755 examples/transmission-route-hook.sh /usr/local/bin/raspbibi-transmission-route
 ```
 
-The movie and series destination directories must already exist on the mounted
+All configured destination directories must already exist on the mounted
 disks and be writable by the Transmission service account (often
 `debian-transmission`). The hook refuses a missing destination instead of
 creating it. This does not verify that a disk is mounted: ensure the mounts are
@@ -142,8 +148,9 @@ Transmission can briefly interrupt uploading while moving data; after a
 successful move an active torrent continues automatically. A move failure can
 stop the torrent. Explicitly paused torrents are not started by the hook.
 Relocation also overrides Transmission's incomplete-directory setting: partial
-data moves into the category directory immediately. Unknown and custom
-torrents retain their current location, including any manually chosen folder.
+data moves into the category directory immediately. Unknown torrents and any
+explicit keep-in-place rules retain their current location, including any
+manually chosen folder.
 An already matching `TR_TORRENT_DIR` is skipped.
 
 The hook exits nonzero for invalid configuration, missing hook variables,
