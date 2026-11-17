@@ -1,21 +1,20 @@
 # AGENTS.md — go-raspbibi
 
-## Commands
+## Project layout
 
-Format:
-  go fmt ./...
+- Find subcommand entry points in `chown.go`, `mover.go`, and `transmission.go`.
+  Their implementations live under `internal/`.
+- Update the README when CLI usage changes. Keep the Transmission setup in sync
+  with the hook and routing config in `examples/`.
+- For Transmission 4.1.0 beta2 behavior, consult the upstream
+  [RPC specification](https://github.com/transmission/transmission/blob/4.1.0-beta.2/docs/rpc-spec.md),
+  [configuration documentation](https://github.com/transmission/transmission/blob/4.1.0-beta.2/docs/Editing-Configuration-Files.md),
+  and [hook implementation](https://github.com/transmission/transmission/blob/4.1.0-beta.2/libtransmission/torrent.cc).
 
-Fix:
-  go fix ./...
+## Development commands
 
-Static analysis:
-  CGO_ENABLED=0 go vet -tags osusergo ./...
-
-Build (host):
-  CGO_ENABLED=0 go build -tags osusergo -o bin/raspbibi .
-
-Build (arm64):
-  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags osusergo -o bin/raspbibi-arm64 .
-
-Build all:
-  CGO_ENABLED=0 go build -tags osusergo -o bin/raspbibi . && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags osusergo -o bin/raspbibi-arm64 .
+- Format Go code with `go fmt ./...`.
+- Apply Go fixers with `go fix ./...` when needed.
+- Run tests with `CGO_ENABLED=0 go test -tags osusergo ./...`.
+- Run static analysis with `CGO_ENABLED=0 go vet -tags osusergo ./...`.
+- Use the host and cross-build commands in [Build and install](README.md#build-and-install).
