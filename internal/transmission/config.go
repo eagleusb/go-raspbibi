@@ -20,11 +20,10 @@ type Config struct {
 }
 
 type Rule struct {
-	Name          string `json:"name"`
-	Pattern       string `json:"pattern"`
-	Destination   string `json:"destination,omitempty"`
-	SeriesSubdirs bool   `json:"series_subdirs,omitempty"`
-	regex         *regexp.Regexp
+	Name        string `json:"name"`
+	Pattern     string `json:"pattern"`
+	Destination string `json:"destination,omitempty"`
+	regex       *regexp.Regexp
 }
 
 // LoadConfig validates the whole file before any filesystem or RPC operations.
@@ -49,9 +48,6 @@ func LoadConfig(r io.Reader) (Config, error) {
 		rule := &cfg.Rules[i]
 		if strings.TrimSpace(rule.Name) == "" || strings.TrimSpace(rule.Pattern) == "" {
 			return Config{}, fmt.Errorf("rule %d requires a name and pattern", i+1)
-		}
-		if rule.SeriesSubdirs && rule.Destination == "" {
-			return Config{}, fmt.Errorf("rule %q requires a destination with series_subdirs", rule.Name)
 		}
 		if rule.Destination != "" && (!filepath.IsAbs(rule.Destination) || strings.ContainsRune(rule.Destination, 0)) {
 			return Config{}, fmt.Errorf("rule %q destination must be an absolute path", rule.Name)
