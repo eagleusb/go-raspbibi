@@ -12,18 +12,25 @@ move the torrent via RPC. The first matching rule wins.
 
 | Match | Destination |
 | --- | --- |
-| `Plus.belle.la.vie.encore.plus.belle.S0?E??` (case insensitive) | `/mnt/sdb/mylen/Plus.belle.la.vie.encore.plus.belle` |
-| Series markers such as `S01E02`, `S02`, or `1x02` | `/mnt/sda/series` |
+| `Plus.belle.la.vie.encore.plus.belle.S03E123` (season 3, three-digit episode) | `/mnt/sdb/mylen/Plus.Belle.La.Vie.Encore.Plus.Belle/s03` |
+| Series markers such as `S01E02`, `S02`, or `1x02` | `/mnt/sda/series/<Show.Title>/sNN` |
 | A year such as `1999` or `2024` | `/mnt/sdb/movies-hd` |
 | No matching rule | Keep the existing download folder |
 
-The show pattern matches from the start of the name, with literal dots and one
-digit per `?`. It accepts suffixes such as `.1080p` after `S01E02`. `S10E02`
-and `S01E123` use the general series rule.
+The series rules use the title before the season marker. They join words with
+dots and capitalize each word while preserving its remaining casing.
+
+- `Orange.Is.the.New.Black.S01.MULTi.1080p.NF.WEB.DDP.AV1-BTT` goes to
+  `/mnt/sda/series/Orange.Is.The.New.Black/s01`.
+- `MobLand.S02E09.MULTi.4KLight.DV.HDR10+.WEBRip.DDP5.1.Atmos.x265-[BATGirl].mkv`
+  goes to `/mnt/sda/series/MobLand/s02`.
 
 Edit `examples/transmission-route.json` to put exceptions before the general
-series and year rules. Use absolute paths. Unicode is supported. A matching rule
-with an empty or omitted `destination` keeps the current folder.
+series and year rules. To enable this layout in an installed config, set
+`"series_subdirs": true` and set `destination` to the absolute series root.
+Use `/mnt/sdb/mylen` for the `Plus belle la vie` rule and `/mnt/sda/series` for
+the general series rule. For fixed rules, an empty or omitted `destination`
+keeps the current folder.
 
 ### Build and install
 
@@ -50,9 +57,10 @@ sudo install -m 0644 examples/transmission-route.json /etc/raspbibi/transmission
 sudo install -m 0755 examples/transmission-route-hook.sh /usr/local/bin/raspbibi-transmission-route
 ```
 
-Before starting Transmission, mount the disks and make sure the destination
-directories exist and are writable by the service account (often
-`debian-transmission`).
+Mount the disks before starting Transmission. The hook creates missing series
+roots, show folders, and season folders. Fixed destinations must already
+exist. Give the service account (often `debian-transmission`) write access to
+the destinations and the parent directories where it creates folders.
 
 To enable the hook in Transmission 4.1.0 beta2, run
 `sudo systemctl stop transmission-daemon`, then merge these entries into the
@@ -107,7 +115,7 @@ TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
 - The hook calls `torrent-set-location` with `move: true` for the torrent's
   info hash. Partial data moves immediately, even with an incomplete directory
   configured. Active torrents resume after a successful move. Paused torrents
-  stay paused.
+  stay paused. Season packs keep their existing file and folder structure.
 - **Requested relocation** means Transmission accepted the request. Check
   Transmission for the final location or move errors, especially before retrying
   after a timeout. RPC requests time out after 30 seconds by default. Use

@@ -4,12 +4,14 @@
     {
       "name": "plus-belle-la-vie",
       "pattern": "(?i)^Plus[.]belle[.]la[.]vie[.]encore[.]plus[.]belle[.]S03E[0-9]{3}([ ._-]|$)",
-      "destination": "/mnt/sdb/mylen/Plus.belle.la.vie.encore.plus.belle/s03"
+      "destination": "/mnt/sdb/mylen",
+      "series_subdirs": true
     },
     {
       "name": "series",
       "pattern": "(?i)(^|[ ._-])(s[0-9]{1,2}(e[0-9]{1,3})?|[0-9]{1,2}x[0-9]{1,3})([ ._-]|$)",
-      "destination": "/mnt/sda/series"
+      "destination": "/mnt/sda/series",
+      "series_subdirs": true
     },
     {
       "name": "movies",

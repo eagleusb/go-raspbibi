@@ -34,7 +34,17 @@ func Run(ctx context.Context, cfg Config, torrent Torrent, client Client, dryRun
 		fmt.Fprintf(output, "Keeping %q in its existing download folder\n", torrent.Name)
 		return nil
 	}
-	destination := filepath.Clean(rule.Destination)
+	root := filepath.Clean(rule.Destination)
+	destination := root
+	var showDir string
+	if rule.SeriesSubdirs {
+		title, season, err := seriesPathComponents(torrent.Name)
+		if err != nil {
+			return fmt.Errorf("rule %q: %w", rule.Name, err)
+		}
+		showDir = filepath.Join(root, title)
+		destination = filepath.Join(showDir, season)
+	}
 	if torrent.Dir != "" && filepath.Clean(torrent.Dir) == destination {
 		fmt.Fprintf(output, "Keeping %q: already in %q\n", torrent.Name, destination)
 		return nil
@@ -43,14 +53,18 @@ func Run(ctx context.Context, cfg Config, torrent Torrent, client Client, dryRun
 		fmt.Fprintf(output, "[DRY-RUN] Would request relocation of %q to %q (rule %q)\n", torrent.Name, destination, rule.Name)
 		return nil
 	}
-	// Require an existing destination: do not create folders on the root disk
-	// when one of the Raspberry Pi's external disks is unavailable.
-	info, err := os.Stat(destination)
-	if err != nil {
-		return fmt.Errorf("destination %q is unavailable: %w", destination, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("destination %q is not a directory", destination)
+	if rule.SeriesSubdirs {
+		if err := prepareSeriesDestination(root, showDir, destination); err != nil {
+			return err
+		}
+	} else {
+		info, err := os.Stat(destination)
+		if err != nil {
+			return fmt.Errorf("destination %q is unavailable: %w", destination, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("destination %q is not a directory", destination)
+		}
 	}
 	client.URL = cfg.RPCURL
 	if err := client.Move(ctx, torrent.Hash, destination); err != nil {
