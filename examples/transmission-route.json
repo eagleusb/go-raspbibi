@@ -3,8 +3,8 @@
   "rules": [
     {
       "name": "plus-belle-la-vie",
-      "pattern": "(?i)^Plus[.]belle[.]la[.]vie[.]encore[.]plus[.]belle[.]S0[0-9]E[0-9]{2}([ ._-]|$)",
-      "destination": "/mnt/sdb/mylen/Plus.belle.la.vie.encore.plus.belle"
+      "pattern": "(?i)^Plus[.]belle[.]la[.]vie[.]encore[.]plus[.]belle[.]S03E[0-9]{3}([ ._-]|$)",
+      "destination": "/mnt/sdb/mylen/Plus.belle.la.vie.encore.plus.belle/s03"
     },
     {
       "name": "series",
