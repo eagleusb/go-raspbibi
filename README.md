@@ -12,25 +12,18 @@ move the torrent via RPC. The first matching rule wins.
 
 | Match | Destination |
 | --- | --- |
-| `Plus.belle.la.vie.encore.plus.belle.S03E123` (season 3, three-digit episode) | `/mnt/sdb/mylen/Plus.Belle.La.Vie.Encore.Plus.Belle/s03` |
-| Series markers such as `S01E02`, `S02`, or `1x02` | `/mnt/sda/series/<Show.Title>/sNN` |
+| `Plus.belle.la.vie.encore.plus.belle.S03E123` (season 3, three-digit episode) | `/mnt/sdb/mylen/Plus.belle.la.vie.encore.plus.belle/s03` |
+| Series markers such as `S01E02`, `S02`, or `1x02` | `/mnt/sda/series` |
 | A year such as `1999` or `2024` | `/mnt/sdb/movies-hd` |
 | No matching rule | Keep the existing download folder |
 
-The series rules use the title before the season marker. They join words with
-dots and capitalize each word while preserving its remaining casing.
-
-- `Orange.Is.the.New.Black.S01.MULTi.1080p.NF.WEB.DDP.AV1-BTT` goes to
-  `/mnt/sda/series/Orange.Is.The.New.Black/s01`.
-- `MobLand.S02E09.MULTi.4KLight.DV.HDR10+.WEBRip.DDP5.1.Atmos.x265-[BATGirl].mkv`
-  goes to `/mnt/sda/series/MobLand/s02`.
+The show-specific rule matches from the start of the name, ignores case, and
+allows release suffixes such as `.1080p`. Other seasons and episode markers with
+one or two digits use the general series rule.
 
 Edit `examples/transmission-route.json` to put exceptions before the general
-series and year rules. To enable this layout in an installed config, set
-`"series_subdirs": true` and set `destination` to the absolute series root.
-Use `/mnt/sdb/mylen` for the `Plus belle la vie` rule and `/mnt/sda/series` for
-the general series rule. For fixed rules, an empty or omitted `destination`
-keeps the current folder.
+series and year rules. Use absolute paths. Unicode is supported. A matching rule
+with an empty or omitted `destination` keeps the current folder.
 
 ### Build and install
 
@@ -57,10 +50,8 @@ sudo install -m 0644 examples/transmission-route.json /etc/raspbibi/transmission
 sudo install -m 0755 examples/transmission-route-hook.sh /usr/local/bin/raspbibi-transmission-route
 ```
 
-Mount the disks before starting Transmission. The hook creates missing series
-roots, show folders, and season folders. Fixed destinations must already
-exist. Give the service account (often `debian-transmission`) write access to
-the destinations and the parent directories where it creates folders.
+Before starting Transmission, mount the disks and make sure the destination
+directories exist.
 
 To enable the hook in Transmission 4.1.0 beta2, run
 `sudo systemctl stop transmission-daemon`, then merge these entries into the
@@ -74,9 +65,7 @@ existing `settings.json` with `sudoedit`. On Debian, the file is usually
 ```
 
 The default RPC endpoint is `http://127.0.0.1:9091/transmission/rpc`. Set
-`rpc_url` in the routing config to use another endpoint, or set
-`RASPBIBI_TRANSMISSION_CONFIG` in the service environment to select another
-config file.
+`rpc_url` in `/etc/raspbibi/transmission-route.json` to use another endpoint.
 
 If RPC authentication is enabled, create a root-owned
 `/etc/raspbibi/transmission-rpc.env` with mode `0600`. Use the original password
@@ -94,11 +83,17 @@ Run `sudo systemctl edit transmission-daemon` and add the environment file.
 EnvironmentFile=/etc/raspbibi/transmission-rpc.env
 ```
 
-Run `sudo systemctl start transmission-daemon` after setup. Restart the service
-after later changes to its environment.
+#### Run the hook as Jellyfin
 
-For GTK, close the app, merge the same settings into its `settings.json`
-(typically `~/.config/transmission/settings.json`), and reopen it.
+Transmission must invoke the launcher as root with `CAP_SETUID` and
+`CAP_SETGID`. The launcher uses `setpriv` to run `raspbibi` as
+`jellyfin:jellyfin` with Jellyfin's supplementary groups and the inherited
+hook environment.
+
+Keep the launcher, binary, and routing config writable only by root. Jellyfin
+needs access to the configured destinations, and Transmission needs write
+access to move torrents via RPC. Start or restart `transmission-daemon` after
+setup.
 
 ### Preview and behavior
 
@@ -115,7 +110,7 @@ TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
 - The hook calls `torrent-set-location` with `move: true` for the torrent's
   info hash. Partial data moves immediately, even with an incomplete directory
   configured. Active torrents resume after a successful move. Paused torrents
-  stay paused. Season packs keep their existing file and folder structure.
+  stay paused.
 - **Requested relocation** means Transmission accepted the request. Check
   Transmission for the final location or move errors, especially before retrying
   after a timeout. RPC requests time out after 30 seconds by default. Use
