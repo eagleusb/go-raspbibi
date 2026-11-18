@@ -83,16 +83,31 @@ Run `sudo systemctl edit transmission-daemon` and add the environment file.
 EnvironmentFile=/etc/raspbibi/transmission-rpc.env
 ```
 
-#### Run the hook as Jellyfin
+#### Share media access with Jellyfin
 
-Transmission must invoke the launcher as root with `CAP_SETUID` and
-`CAP_SETGID`. The launcher uses `setpriv` to run `raspbibi` as
-`jellyfin:jellyfin` with Jellyfin's supplementary groups and the inherited
-hook environment.
+The hook runs as Transmission's service user, normally `debian-transmission`
+on Debian. To give both services access to the same media, add the `jellyfin`
+group to the Transmission unit with `sudo systemctl edit transmission-daemon`.
 
-Keep the launcher, binary, and routing config writable only by root. Jellyfin
-needs access to the configured destinations, and Transmission needs write
-access to move torrents via RPC. Start or restart `transmission-daemon` after
+```ini
+[Service]
+SupplementaryGroups=jellyfin
+```
+
+Apply shared permissions to each media tree both services manage, including
+Transmission's download and incomplete directories if you use them. For
+example, on the mounted series disk:
+
+```sh
+sudo chgrp -R -- jellyfin /mnt/sda/series
+sudo chmod -R -- g+rwX /mnt/sda/series
+sudo find /mnt/sda/series -type d -exec chmod g+s -- {} +
+```
+
+The setgid bit gives new entries the parent directory's group. While
+Transmission is stopped, set `"umask": "002"` in `settings.json` so new
+downloads are group-writable. If Jellyfin creates files in those trees too,
+set `UMask=0002` in its systemd service. Start or restart Transmission after
 setup.
 
 ### Preview and behavior
