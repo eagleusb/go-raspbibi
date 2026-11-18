@@ -11,6 +11,43 @@ import (
 	"time"
 )
 
+type rpcTransport func(*http.Request) (*http.Response, error)
+
+func (f rpcTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRPCCredentialsRequireHTTPSOutsideLoopback(t *testing.T) {
+	for _, tt := range []struct {
+		url     string
+		allowed bool
+	}{
+		{"http://192.0.2.1/rpc", false},
+		{"http://transmission.example/rpc", false},
+		{"http://localhost.example/rpc", false},
+		{"http://user:password@localhost/rpc", false},
+		{"http://127.0.0.1/rpc", true},
+		{"http://[::1]/rpc", true},
+		{"http://localhost/rpc", true},
+		{"https://transmission.example/rpc", true},
+	} {
+		t.Run(tt.url, func(t *testing.T) {
+			calls := 0
+			transport := rpcTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				user, password, ok := r.BasicAuth()
+				if !ok || user != "user" || password != "password" {
+					t.Error("expected credentials on the permitted request")
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"result":"success"}`))}, nil
+			})
+			client := Client{URL: tt.url, Username: "user", Password: "password", HTTP: &http.Client{Transport: transport}}
+			err := client.Move(context.Background(), testHash, "/destination")
+			if tt.allowed && (err != nil || calls != 1) || !tt.allowed && (err == nil || calls != 0) {
+				t.Fatalf("allowed = %v, error = %v, requests = %d", tt.allowed, err, calls)
+			}
+		})
+	}
+}
+
 func TestRPCFailures(t *testing.T) {
 	for _, tt := range []struct {
 		name, body, token, want string
