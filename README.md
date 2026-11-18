@@ -66,15 +66,15 @@ TRANSMISSION_RPC_USERNAME=your-user
 TRANSMISSION_RPC_PASSWORD=your-password
 ```
 
+Authenticated RPC requires HTTPS outside loopback.
+
 #### Share media access with Jellyfin
 
-Apply group write and setgid permissions to each shared tree, including download
-and incomplete directories. This example uses the series directory.
+Apply [shared ownership and permissions](#chown) to each media tree, including
+download and incomplete directories.
 
 ```sh
-sudo chgrp -R -- jellyfin /mnt/sda/series
-sudo chmod -R -- g+rwX /mnt/sda/series
-sudo find /mnt/sda/series -type d -exec chmod g+s -- {} +
+sudo /usr/local/bin/raspbibi chown -path /mnt/sda/series
 ```
 
 - Set `"umask": "002"` in Transmission's `settings.json` for group-writable downloads.
@@ -119,21 +119,32 @@ TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
 ```
 
 - Dry-run previews the destination without moving data or calling RPC.
-- The hook runs once metadata is available and skips torrents already at the destination.
+- The hook runs once metadata is available. It checks the final download directory
+  before skipping a torrent whose current directory matches the destination.
 - Relocation moves partial data immediately. Active torrents resume after the move.
 - **Requested relocation** means Transmission accepted the request. Check Transmission
   before retrying after a timeout. The default is 30 seconds, adjustable with `-timeout`.
 
 ## Chown
 
-Change ownership recursively.
+Maintain shared ownership and permissions recursively.
 
 ```sh
-raspbibi chown -path /srv/media -user jellyfin -group jellyfin -dry-run
+sudo /usr/local/bin/raspbibi chown -path /srv/media -dry-run
 ```
 
-- Defaults are `-path .`, `-user jellyfin`, and a `-group` matching `-user`.
-- Remove `-dry-run` to apply changes. Use `sudo` if needed.
+- Defaults are `-path .`, `-user debian-transmission`, and `-group jellyfin`.
+- Files get owner and group read/write access. Directories also get search access
+  and setgid so new entries inherit the group.
+- Remove `-dry-run` to apply changes. Runs report changes and errors.
+
+### Daily maintenance
+
+Example root crontab entry, daily at 03:00.
+
+```cron
+0 3 * * * /usr/local/bin/raspbibi chown -path /srv/media
+```
 
 ## Mover
 
@@ -147,6 +158,7 @@ raspbibi mover -src /mnt/sda/downloads -dst /mnt/sdb/movies-hd -dry-run
   becomes `Movie.Name.2024.mkv`.
 - Defaults are `-src .`, `-dst /mnt/sdb/movies-hd`, and `-algo sampling`.
   Use `-algo full` for full-file checksums.
-- Keep the destination outside the source tree. On a collision, matching size
-  and checksum trigger source deletion. Differing files overwrite the destination.
+- Keep the destination outside the source tree. On a collision, the mover removes
+  a duplicate source after byte-for-byte verification. Differing files overwrite
+  the destination. A failed comparison leaves both files in place.
 - Remove `-dry-run` to apply moves.
