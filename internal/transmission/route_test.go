@@ -97,7 +97,7 @@ func TestRouteDoesNotMutateForSkippedOrInvalidTorrents(t *testing.T) {
 		{"unknown", "Unknown", testHash, false, false, false},
 		{"custom priority", "Custom.Show.S01E02", testHash, false, false, false},
 		{"dry run", "Show.S01E02", testHash, true, false, false},
-		{"same directory", "Show.S01E02", testHash, false, true, false},
+		{"same directory dry run", "Show.S01E02", testHash, true, true, false},
 		{"missing directory", "Show.S01E02", testHash, false, false, true},
 		{"missing name", "", testHash, false, false, true},
 		{"missing hash", "Show.S01E02", "", false, false, true},
@@ -122,6 +122,62 @@ func TestRouteDoesNotMutateForSkippedOrInvalidTorrents(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("unexpected RPC calls: %d", calls.Load())
+	}
+}
+
+func TestRouteUsesFinalDownloadDirBeforeSkipping(t *testing.T) {
+	destination := t.TempDir()
+	for _, tt := range []struct {
+		name, finalDir string
+		moves          int32
+	}{
+		{"already routed", destination + "/", 0},
+		{"current directory is incomplete", t.TempDir(), 1},
+		{"missing download directory", "", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var gets, moves atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Method    string `json:"method"`
+					Arguments struct {
+						moveArguments
+						Fields []string `json:"fields"`
+					} `json:"arguments"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if ids := request.Arguments.IDs; len(ids) != 1 || ids[0] != testHash {
+					t.Errorf("unexpected torrent selector: %v", ids)
+				}
+				switch request.Method {
+				case "torrent-get":
+					gets.Add(1)
+					if fields := request.Arguments.Fields; len(fields) != 1 || fields[0] != "downloadDir" {
+						t.Errorf("unexpected fields: %v", fields)
+					}
+					io.WriteString(w, `{"result":"success","arguments":{"torrents":[{"downloadDir":`)
+					json.NewEncoder(w).Encode(tt.finalDir)
+					io.WriteString(w, `}]}}`)
+				case "torrent-set-location":
+					moves.Add(1)
+					if gets.Load() != 1 || request.Arguments.Location != destination || !request.Arguments.Move {
+						t.Errorf("unexpected relocation: %+v", request.Arguments)
+					}
+					io.WriteString(w, `{"result":"success"}`)
+				default:
+					t.Errorf("unexpected method: %q", request.Method)
+				}
+			}))
+			defer server.Close()
+			cfg := testConfig(t, server.URL, destination)
+			torrent := Torrent{Name: "Show.S01E02", Hash: testHash, Dir: destination}
+			err := Run(context.Background(), cfg, torrent, Client{}, false, io.Discard)
+			if (err != nil) != (tt.finalDir == "") || gets.Load() != 1 || moves.Load() != tt.moves {
+				t.Fatalf("error = %v, lookups = %d, moves = %d (want %d)", err, gets.Load(), moves.Load(), tt.moves)
+			}
+		})
 	}
 }
 
