@@ -1,68 +1,87 @@
 package mover
 
 import (
-	"hash"
+	"bytes"
+	"context"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
 )
 
-const sampleSize = 1024 * 1024 // 1MB per sample
+const sampleSize = 1024 * 1024
 
-// CRC32Sum computes the CRC-32 checksum of the file at path by streaming.
-// Returns the checksum as a uint32.
-func CRC32Sum(path string) (uint32, error) {
-	f, err := os.Open(path)
-	if err != nil {
+type contextReader struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	return r.Reader.Read(p)
+}
 
+func checksum(ctx context.Context, file *regularFile, algo string) (uint32, error) {
 	h := crc32.NewIEEE()
-	if _, err := io.Copy(h, f); err != nil {
-		return 0, err
+	size := file.info.Size()
+	if algo == "full" {
+		_, err := io.CopyN(h, contextReader{ctx, io.NewSectionReader(file, 0, size)}, size)
+		return h.Sum32(), err
+	}
+
+	offsets := []int64{0}
+	if size > 2*sampleSize {
+		offsets = append(offsets, size/2)
+	}
+	if size > sampleSize {
+		offsets = append(offsets, size-sampleSize)
+	}
+	for _, offset := range offsets {
+		length := min(sampleSize, size-offset)
+		if _, err := io.CopyN(h, contextReader{ctx, io.NewSectionReader(file, offset, length)}, length); err != nil {
+			return 0, err
+		}
 	}
 	return h.Sum32(), nil
 }
 
-// SampleChecksum reads three 1MB samples (start, middle, end) from the file
-// and computes a CRC-32 over them. Fast fingerprint without reading the entire file.
-func SampleChecksum(path string) (uint32, error) {
-	info, err := os.Stat(path)
+func filesMatch(ctx context.Context, src, dst *regularFile, algo string) (bool, error) {
+	if os.SameFile(src.info, dst.info) {
+		return false, fmt.Errorf("source and destination are the same file: %q", dst.Name())
+	}
+	size := src.info.Size()
+	if size != dst.info.Size() {
+		return false, nil
+	}
+	left, err := checksum(ctx, src, algo)
 	if err != nil {
-		return 0, err
+		return false, err
+	}
+	right, err := checksum(ctx, dst, algo)
+	if err != nil || left != right {
+		return false, err
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
+	// A checksum match only qualifies the files for an exact comparison.
+	srcBytes := make([]byte, 64*1024)
+	dstBytes := make([]byte, len(srcBytes))
+	for offset := int64(0); offset < size; {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		length := min(int64(len(srcBytes)), size-offset)
+		if _, err := src.ReadAt(srcBytes[:length], offset); err != nil {
+			return false, err
+		}
+		if _, err := dst.ReadAt(dstBytes[:length], offset); err != nil {
+			return false, err
+		}
+		if !bytes.Equal(srcBytes[:length], dstBytes[:length]) {
+			return false, nil
+		}
+		offset += length
 	}
-	defer f.Close()
-
-	h := crc32.NewIEEE()
-	buf := make([]byte, sampleSize)
-
-	// Sample 1: start
-	readSample(f, buf, h)
-
-	// Sample 2: middle
-	if info.Size() > 2*sampleSize {
-		f.Seek(info.Size()/2, io.SeekStart)
-		readSample(f, buf, h)
-	}
-
-	// Sample 3: end
-	if info.Size() > sampleSize {
-		f.Seek(info.Size()-sampleSize, io.SeekStart)
-		readSample(f, buf, h)
-	}
-
-	return h.Sum32(), nil
-}
-
-func readSample(f *os.File, buf []byte, h hash.Hash32) {
-	n, _ := f.Read(buf)
-	if n > 0 {
-		h.Write(buf[:n])
-	}
+	return true, nil
 }
