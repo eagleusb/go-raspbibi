@@ -18,8 +18,8 @@ func init() {
 func runChown(ctx context.Context) {
 	fs := flag.NewFlagSet("chown", flag.ExitOnError)
 	path := fs.String("path", ".", "Target directory")
-	username := fs.String("user", "jellyfin", "Owner username")
-	groupname := fs.String("group", "", "Group name (defaults to -user if unset)")
+	username := fs.String("user", "debian-transmission", "Owner username")
+	groupname := fs.String("group", "jellyfin", "Shared group name")
 	dryRun := fs.Bool("dry-run", false, "Show what would happen without making changes")
 	fs.Parse(os.Args[1:])
 
@@ -31,22 +31,6 @@ func runChown(ctx context.Context) {
 
 	if *path == "" {
 		fs.Usage()
-		os.Exit(1)
-	}
-
-	// Default -group to -user
-	if *groupname == "" {
-		*groupname = *username
-	}
-
-	// Validate target directory exists
-	info, err := os.Stat(*path)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	if !info.IsDir() {
-		fmt.Printf("Error: %s is not a directory\n", *path)
 		os.Exit(1)
 	}
 
@@ -82,6 +66,7 @@ func runChown(ctx context.Context) {
 	}
 
 	if err := chown.Run(ctx, cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
