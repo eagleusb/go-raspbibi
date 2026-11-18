@@ -46,6 +46,7 @@ func runMover(ctx context.Context) {
 	}
 
 	if err := mover.Run(ctx, cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
