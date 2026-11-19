@@ -1,3 +1,4 @@
+// Package transmission routes torrents and removes expired torrent entries.
 package transmission
 
 import (
@@ -11,23 +12,19 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+
+	"github.com/hekmon/transmissionrpc/v3"
 )
 
 const sessionHeader = "X-Transmission-Session-Id"
+
+// DefaultRPCURL is the local Transmission daemon's default RPC endpoint.
 const DefaultRPCURL = "http://127.0.0.1:9091/transmission/rpc"
+const maxRPCResponseBytes = 1 << 20
 
-type moveArguments struct {
-	IDs      []string `json:"ids"`
-	Location string   `json:"location"`
-	Move     bool     `json:"move"`
-}
-
-// Client uses the legacy RPC protocol supported by Transmission 4.1.0 beta2.
+// Client wraps the Transmission RPC operations used by routing and cleanup.
 type Client struct {
-	URL      string
-	Username string
-	Password string
-	HTTP     *http.Client
+	rpc *transmissionrpc.Client
 }
 
 // NewClient validates the endpoint or uses the default local RPC URL.
@@ -39,135 +36,80 @@ func NewClient(endpoint, username, password string) (Client, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.ContainsRune(endpoint, '#') {
 		return Client{}, fmt.Errorf("TRANSMISSION_RPC_URL must be an HTTP(S) URL without credentials, query, or fragment")
 	}
-	return Client{URL: endpoint, Username: username, Password: password}, nil
-}
-
-func (c Client) Move(ctx context.Context, hash, destination string) error {
-	return c.call(ctx, "torrent-set-location", moveArguments{IDs: []string{hash}, Location: destination, Move: true}, nil)
-}
-
-func (c Client) DownloadDir(ctx context.Context, hash string) (string, error) {
-	args := struct {
-		IDs    []string `json:"ids"`
-		Fields []string `json:"fields"`
-	}{IDs: []string{hash}, Fields: []string{"downloadDir"}}
-	var result struct {
-		Torrents []struct {
-			DownloadDir string `json:"downloadDir"`
-		} `json:"torrents"`
+	httpClient := &http.Client{
+		Transport:     rpcTransport{username: username, password: password},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	if err := c.call(ctx, "torrent-get", args, &result); err != nil {
+	rpc, err := transmissionrpc.New(parsed, &transmissionrpc.Config{CustomClient: httpClient})
+	if err != nil {
+		return Client{}, fmt.Errorf("initialize Transmission RPC client: %w", err)
+	}
+	return Client{rpc: rpc}, nil
+}
+
+// Move asks Transmission to relocate the torrent identified by hash.
+func (c Client) Move(ctx context.Context, hash, destination string) error {
+	return c.rpc.TorrentSetLocationHash(ctx, hash, destination, true)
+}
+
+// DownloadDir returns the absolute download directory for the given torrent.
+func (c Client) DownloadDir(ctx context.Context, hash string) (string, error) {
+	torrents, err := c.rpc.TorrentGetHashes(ctx, []string{"downloadDir"}, []string{hash})
+	if err != nil {
 		return "", err
 	}
-	if len(result.Torrents) != 1 || !filepath.IsAbs(result.Torrents[0].DownloadDir) {
+	if len(torrents) != 1 || torrents[0].DownloadDir == nil || !filepath.IsAbs(*torrents[0].DownloadDir) {
 		return "", fmt.Errorf("Transmission RPC must return one torrent with an absolute downloadDir")
 	}
-	return result.Torrents[0].DownloadDir, nil
+	return *torrents[0].DownloadDir, nil
 }
 
-func (c Client) seedTorrents(ctx context.Context) ([]seedTorrent, error) {
-	args := struct {
-		Fields []string `json:"fields"`
-	}{Fields: []string{"name", "hashString", "percentDone", "secondsSeeding", "status"}}
-	var result struct {
-		Torrents []seedTorrent `json:"torrents"`
+type rpcTransport struct {
+	username string
+	password string
+}
+
+type numericTorrentIDsKey struct{}
+
+func (t rpcTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.username != "" || t.password != "" {
+		host := req.URL.Hostname()
+		if req.URL.Scheme != "https" && host != "localhost" && !net.ParseIP(host).IsLoopback() {
+			return nil, fmt.Errorf("HTTPS is required for authenticated non-loopback RPC")
+		}
+		req = req.Clone(req.Context())
+		req.SetBasicAuth(t.username, t.password)
 	}
-	if err := c.call(ctx, "torrent-get", args, &result); err != nil {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
 		return nil, err
 	}
-	if result.Torrents == nil {
-		return nil, fmt.Errorf("Transmission RPC response has no torrents array")
-	}
-	return result.Torrents, nil
-}
-
-func (c Client) removeTorrents(ctx context.Context, hashes []string) error {
-	args := struct {
-		IDs             []string `json:"ids"`
-		DeleteLocalData bool     `json:"delete-local-data"`
-	}{IDs: hashes, DeleteLocalData: false}
-	return c.call(ctx, "torrent-remove", args, nil)
-}
-
-func (c Client) call(ctx context.Context, method string, args, result any) error {
-	body, err := json.Marshal(struct {
-		Method    string `json:"method"`
-		Arguments any    `json:"arguments"`
-	}{Method: method, Arguments: args})
-	if err != nil {
-		return err
-	}
-
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{}
-	}
-	// Do not forward a hook's RPC request or credentials to a redirect target.
-	copyClient := *client
-	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	var sessionID string
-	authenticated := c.Username != "" || c.Password != ""
-	for attempt := range 2 {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
-		if err != nil {
-			return fmt.Errorf("create RPC request: %w", err)
-		}
-		if req.URL.User != nil {
-			return fmt.Errorf("RPC URL must not contain credentials")
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if sessionID != "" {
-			req.Header.Set(sessionHeader, sessionID)
-		}
-		if authenticated {
-			host := req.URL.Hostname()
-			loopback := req.URL.Scheme == "http" && (host == "localhost" || net.ParseIP(host).IsLoopback())
-			if req.URL.Scheme != "https" && !loopback {
-				return fmt.Errorf("HTTPS is required for authenticated non-loopback RPC")
-			}
-			req.SetBasicAuth(c.Username, c.Password)
-		}
-		resp, err := copyClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("Transmission RPC %s request: %w", method, err)
-		}
-		if resp.StatusCode == http.StatusConflict && attempt == 0 {
-			sessionID = resp.Header.Get(sessionHeader)
+	if resp.StatusCode == http.StatusConflict {
+		// Cleanup's numeric IDs are valid only within the session that listed
+		// them. Routing uses hashes and can retry against a new session.
+		if req.Header.Get(sessionHeader) != "" && req.Context().Value(numericTorrentIDsKey{}) == true {
 			resp.Body.Close()
-			if sessionID == "" {
-				return fmt.Errorf("RPC session challenge has no %s header", sessionHeader)
-			}
-			continue
+			return nil, fmt.Errorf("Transmission RPC session was rejected")
 		}
-		err = readResponse(resp, result)
-		resp.Body.Close()
-		return err
+		if resp.Header.Get(sessionHeader) == "" {
+			resp.Body.Close()
+			return nil, fmt.Errorf("RPC session challenge has no %s header", sessionHeader)
+		}
 	}
-	return fmt.Errorf("RPC session negotiation failed")
-}
-
-func readResponse(resp *http.Response, result any) error {
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Transmission RPC returned HTTP %d", resp.StatusCode)
+		return resp, nil
 	}
-	var response struct {
-		Result    string          `json:"result"`
-		Arguments json.RawMessage `json:"arguments"`
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRPCResponseBytes+1))
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read RPC response: %w", err)
 	}
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
-	if err := decoder.Decode(&response); err != nil {
-		return fmt.Errorf("decode RPC response: %w", err)
+	if len(body) > maxRPCResponseBytes {
+		return nil, fmt.Errorf("Transmission RPC response exceeds %d bytes", maxRPCResponseBytes)
 	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return fmt.Errorf("RPC response must contain exactly one JSON object")
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("Transmission RPC returned invalid JSON")
 	}
-	if response.Result != "success" {
-		return fmt.Errorf("Transmission RPC failed: %q", response.Result)
-	}
-	if result != nil {
-		if err := json.Unmarshal(response.Arguments, result); err != nil {
-			return fmt.Errorf("decode RPC response arguments: %w", err)
-		}
-	}
-	return nil
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }
