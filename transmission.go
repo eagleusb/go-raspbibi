@@ -16,7 +16,6 @@ func init() {
 
 func runTransmissionRoute(ctx context.Context) {
 	fs := flag.NewFlagSet("transmission-route", flag.ExitOnError)
-	configPath := fs.String("config", "/etc/raspbibi/transmission-route.json", "Routing configuration file")
 	dryRun := fs.Bool("dry-run", false, "Show the matched destination without filesystem changes or RPC requests")
 	timeout := fs.Duration("timeout", 30*time.Second, "Maximum RPC request duration")
 	fs.Parse(os.Args[1:])
@@ -24,30 +23,26 @@ func runTransmissionRoute(ctx context.Context) {
 		fs.Usage()
 		os.Exit(1)
 	}
-	if err := executeTransmissionRoute(ctx, *configPath, *dryRun, *timeout); err != nil {
+	if err := executeTransmissionRoute(ctx, *dryRun, *timeout); err != nil {
 		fmt.Fprintf(os.Stderr, "transmission-route: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func executeTransmissionRoute(ctx context.Context, configPath string, dryRun bool, timeout time.Duration) error {
-	f, err := os.Open(configPath)
-	if err != nil {
-		return fmt.Errorf("open routing config: %w", err)
-	}
-	cfg, err := transmission.LoadConfig(f)
-	f.Close()
+func executeTransmissionRoute(ctx context.Context, dryRun bool, timeout time.Duration) error {
+	client, err := transmission.NewClient(
+		os.Getenv("TRANSMISSION_RPC_URL"),
+		os.Getenv("TRANSMISSION_RPC_USERNAME"),
+		os.Getenv("TRANSMISSION_RPC_PASSWORD"),
+	)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return transmission.Run(ctx, cfg, transmission.Torrent{
+	return transmission.Run(ctx, transmission.Torrent{
 		Name: os.Getenv("TR_TORRENT_NAME"),
 		Hash: os.Getenv("TR_TORRENT_HASH"),
 		Dir:  os.Getenv("TR_TORRENT_DIR"),
-	}, transmission.Client{
-		Username: os.Getenv("TRANSMISSION_RPC_USERNAME"),
-		Password: os.Getenv("TRANSMISSION_RPC_PASSWORD"),
-	}, dryRun, os.Stdout)
+	}, client, dryRun, os.Stdout)
 }

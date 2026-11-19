@@ -19,7 +19,11 @@ type Torrent struct {
 
 // Run requests relocation of just the hook's torrent. It never renames torrent
 // contents, stops/starts torrents, or uses the standalone filesystem mover.
-func Run(ctx context.Context, cfg Config, torrent Torrent, client Client, dryRun bool, output io.Writer) error {
+func Run(ctx context.Context, torrent Torrent, client Client, dryRun bool, output io.Writer) error {
+	return run(ctx, defaultRules[:], torrent, client, dryRun, output)
+}
+
+func run(ctx context.Context, rules []routeRule, torrent Torrent, client Client, dryRun bool, output io.Writer) error {
 	if torrent.Name == "" {
 		return fmt.Errorf("TR_TORRENT_NAME is required")
 	}
@@ -29,17 +33,16 @@ func Run(ctx context.Context, cfg Config, torrent Torrent, client Client, dryRun
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	rule, matched := cfg.Match(torrent.Name)
-	if !matched || rule.Destination == "" {
+	rule, matched := matchRoute(rules, torrent.Name)
+	if !matched || rule.destination == "" {
 		fmt.Fprintf(output, "Keeping %q in its existing download folder\n", torrent.Name)
 		return nil
 	}
-	destination := filepath.Clean(rule.Destination)
+	destination := filepath.Clean(rule.destination)
 	if dryRun {
-		fmt.Fprintf(output, "[DRY-RUN] Would request relocation of %q to %q (rule %q)\n", torrent.Name, destination, rule.Name)
+		fmt.Fprintf(output, "[DRY-RUN] Would request relocation of %q to %q (rule %q)\n", torrent.Name, destination, rule.name)
 		return nil
 	}
-	client.URL = cfg.RPCURL
 	if torrent.Dir != "" && filepath.Clean(torrent.Dir) == destination {
 		// The hook reports the current data path, which may be an incomplete directory.
 		downloadDir, err := client.DownloadDir(ctx, torrent.Hash)
@@ -61,6 +64,6 @@ func Run(ctx context.Context, cfg Config, torrent Torrent, client Client, dryRun
 	if err := client.Move(ctx, torrent.Hash, destination); err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "Requested relocation of %q to %q (rule %q)\n", torrent.Name, destination, rule.Name)
+	fmt.Fprintf(output, "Requested relocation of %q to %q (rule %q)\n", torrent.Name, destination, rule.name)
 	return nil
 }

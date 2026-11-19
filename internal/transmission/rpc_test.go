@@ -15,6 +15,31 @@ type rpcTransport func(*http.Request) (*http.Response, error)
 
 func (f rpcTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestNewClient(t *testing.T) {
+	client, err := NewClient("", "", "")
+	if err != nil || client.URL != "http://127.0.0.1:9091/transmission/rpc" || client.Username != "" || client.Password != "" {
+		t.Fatal("expected unauthenticated local RPC by default")
+	}
+	const remote = "https://rpc.example.org/custom/rpc"
+	client, err = NewClient(remote, "raspbibi", "test-password")
+	if err != nil || client.URL != remote || client.Username != "raspbibi" || client.Password != "test-password" {
+		t.Fatal("expected the supplied remote endpoint and credentials")
+	}
+	for _, endpoint := range []string{
+		"file:///tmp/rpc",
+		"http://:9091/rpc",
+		"http://user:secret@localhost/rpc",
+		"http://localhost/rpc?password=secret",
+		"http://localhost/rpc?",
+		"http://localhost/rpc#fragment",
+		"http://localhost/rpc#",
+	} {
+		if _, err := NewClient(endpoint, "", ""); err == nil {
+			t.Errorf("accepted invalid endpoint %q", endpoint)
+		}
+	}
+}
+
 func TestRPCCredentialsRequireHTTPSOutsideLoopback(t *testing.T) {
 	for _, tt := range []struct {
 		url     string
