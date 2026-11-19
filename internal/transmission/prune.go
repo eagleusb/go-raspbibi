@@ -11,7 +11,7 @@ import (
 )
 
 const seedLimit = 10 * 24 * time.Hour
-const cleanupBatchSize = 100
+const pruneBatchSize = 100
 
 func expired(torrent transmissionrpc.Torrent) bool {
 	if torrent.ID == nil || *torrent.ID < 0 || torrent.Status == nil ||
@@ -27,8 +27,8 @@ func expired(torrent transmissionrpc.Torrent) bool {
 	}
 }
 
-// Cleanup removes expired torrent entries while preserving their downloaded data.
-func Cleanup(ctx context.Context, client Client, dryRun bool, output io.Writer) error {
+// Prune removes expired torrent entries while preserving their downloaded data.
+func Prune(ctx context.Context, client Client, dryRun bool, output io.Writer) error {
 	torrents, err := findExpiredTorrents(ctx, client.rpc, dryRun)
 	if err != nil {
 		return err
@@ -80,7 +80,7 @@ func findExpiredTorrents(ctx context.Context, rpc *transmissionrpc.Client, inclu
 	}
 	ctx = context.WithValue(ctx, numericTorrentIDsKey{}, true)
 	var expiredTorrents []transmissionrpc.Torrent
-	for batch := range slices.Chunk(ids, cleanupBatchSize) {
+	for batch := range slices.Chunk(ids, pruneBatchSize) {
 		torrents, err := rpc.TorrentGet(ctx, fields, batch)
 		if err != nil {
 			return nil, fmt.Errorf("read torrent eligibility: %w", err)

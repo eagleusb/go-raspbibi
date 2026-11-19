@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-type cleanupRequest struct {
+type pruneRequest struct {
 	Method    string `json:"method"`
 	Tag       int    `json:"tag"`
 	Arguments struct {
@@ -22,7 +22,7 @@ type cleanupRequest struct {
 	} `json:"arguments"`
 }
 
-func TestCleanup(t *testing.T) {
+func TestPrune(t *testing.T) {
 	const idList = `{"result":"success","arguments":{"torrents":[
 		{"id":0},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},{"id":7},{"id":8},{"id":9},{"id":10},{"id":-1},{}
 	]}}`
@@ -68,7 +68,7 @@ func TestCleanup(t *testing.T) {
 					w.WriteHeader(http.StatusConflict)
 					return
 				}
-				var request cleanupRequest
+				var request pruneRequest
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Errorf("decode RPC request: %v", err)
 					w.WriteHeader(http.StatusBadRequest)
@@ -119,7 +119,7 @@ func TestCleanup(t *testing.T) {
 
 			var output bytes.Buffer
 			client := mustRPCClient(t, server.URL, "", "")
-			err := Cleanup(t.Context(), client, tt.dryRun, &output)
+			err := Prune(t.Context(), client, tt.dryRun, &output)
 			if tt.wantError == "" && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -147,13 +147,13 @@ func TestCleanup(t *testing.T) {
 	}
 }
 
-func TestCleanupScansLargeInventoryInBatches(t *testing.T) {
+func TestPruneScansLargeInventoryInBatches(t *testing.T) {
 	const torrentCount = 250
 	name := strings.Repeat("x", 5000)
 
 	var batches atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request cleanupRequest
+		var request pruneRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -173,7 +173,7 @@ func TestCleanupScansLargeInventoryInBatches(t *testing.T) {
 		} else {
 			batches.Add(1)
 			ids := request.Arguments.IDs
-			if len(ids) == 0 || len(ids) > cleanupBatchSize {
+			if len(ids) == 0 || len(ids) > pruneBatchSize {
 				t.Errorf("invalid batch size %d", len(ids))
 				w.WriteHeader(http.StatusBadRequest)
 				return
@@ -199,10 +199,10 @@ func TestCleanupScansLargeInventoryInBatches(t *testing.T) {
 
 	var output bytes.Buffer
 	client := mustRPCClient(t, server.URL, "", "")
-	if err := Cleanup(t.Context(), client, true, &output); err != nil {
+	if err := Prune(t.Context(), client, true, &output); err != nil {
 		t.Fatal(err)
 	}
-	wantBatches := int32((torrentCount + cleanupBatchSize - 1) / cleanupBatchSize)
+	wantBatches := int32((torrentCount + pruneBatchSize - 1) / pruneBatchSize)
 	want := fmt.Sprintf("[DRY-RUN] Would remove %q (ID %d) after 864000 seconds of seeding\n", name, torrentCount-1)
 	if batches.Load() != wantBatches || output.String() != want {
 		t.Fatalf("got %d batches and preview length %d, want %d batches and preview length %d",

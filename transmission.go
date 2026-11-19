@@ -11,12 +11,12 @@ import (
 )
 
 func init() {
-	features["transmission-route"] = runTransmissionRoute
-	features["transmission-cleanup"] = runTransmissionCleanup
+	features["route"] = runTransmissionRoute
+	features["prune"] = runTransmissionPrune
 }
 
 func runTransmissionRoute(ctx context.Context) {
-	fs := flag.NewFlagSet("transmission-route", flag.ExitOnError)
+	fs := flag.NewFlagSet("route", flag.ExitOnError)
 	dryRun := fs.Bool("dry-run", false, "Show the matched destination without filesystem changes or RPC requests")
 	timeout := fs.Duration("timeout", 30*time.Second, "Maximum RPC request duration")
 	fs.Parse(os.Args[1:])
@@ -25,7 +25,7 @@ func runTransmissionRoute(ctx context.Context) {
 		os.Exit(1)
 	}
 	if err := executeTransmissionRoute(ctx, *dryRun, *timeout); err != nil {
-		fmt.Fprintf(os.Stderr, "transmission-route: %v\n", err)
+		fmt.Fprintf(os.Stderr, "route: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -44,10 +44,10 @@ func executeTransmissionRoute(ctx context.Context, dryRun bool, timeout time.Dur
 	}, client, dryRun, os.Stdout)
 }
 
-func runTransmissionCleanup(ctx context.Context) {
-	fs := flag.NewFlagSet("transmission-cleanup", flag.ExitOnError)
+func runTransmissionPrune(ctx context.Context) {
+	fs := flag.NewFlagSet("prune", flag.ExitOnError)
 	dryRun := fs.Bool("dry-run", false, "List expired torrents without removing them")
-	timeout := fs.Duration("timeout", 30*time.Second, "Maximum duration of the cleanup RPC calls")
+	timeout := fs.Duration("timeout", 30*time.Second, "Maximum duration of the pruning RPC calls")
 	fs.Parse(os.Args[1:])
 	if fs.NArg() != 0 || *timeout <= 0 {
 		fs.Usage()
@@ -56,11 +56,11 @@ func runTransmissionCleanup(ctx context.Context) {
 	client, err := newTransmissionClient()
 	if err == nil {
 		ctx, cancel := context.WithTimeout(ctx, *timeout)
-		err = transmission.Cleanup(ctx, client, *dryRun, os.Stdout)
+		err = transmission.Prune(ctx, client, *dryRun, os.Stdout)
 		cancel()
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "transmission-cleanup: %v\n", err)
+		fmt.Fprintf(os.Stderr, "prune: %v\n", err)
 		os.Exit(1)
 	}
 }
