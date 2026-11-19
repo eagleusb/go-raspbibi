@@ -12,6 +12,7 @@ import (
 
 func init() {
 	features["transmission-route"] = runTransmissionRoute
+	features["transmission-cleanup"] = runTransmissionCleanup
 }
 
 func runTransmissionRoute(ctx context.Context) {
@@ -30,11 +31,7 @@ func runTransmissionRoute(ctx context.Context) {
 }
 
 func executeTransmissionRoute(ctx context.Context, dryRun bool, timeout time.Duration) error {
-	client, err := transmission.NewClient(
-		os.Getenv("TRANSMISSION_RPC_URL"),
-		os.Getenv("TRANSMISSION_RPC_USERNAME"),
-		os.Getenv("TRANSMISSION_RPC_PASSWORD"),
-	)
+	client, err := newTransmissionClient()
 	if err != nil {
 		return err
 	}
@@ -45,4 +42,33 @@ func executeTransmissionRoute(ctx context.Context, dryRun bool, timeout time.Dur
 		Hash: os.Getenv("TR_TORRENT_HASH"),
 		Dir:  os.Getenv("TR_TORRENT_DIR"),
 	}, client, dryRun, os.Stdout)
+}
+
+func runTransmissionCleanup(ctx context.Context) {
+	fs := flag.NewFlagSet("transmission-cleanup", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "List expired torrents without removing them")
+	timeout := fs.Duration("timeout", 30*time.Second, "Maximum duration of the cleanup RPC calls")
+	fs.Parse(os.Args[1:])
+	if fs.NArg() != 0 || *timeout <= 0 {
+		fs.Usage()
+		os.Exit(1)
+	}
+	client, err := newTransmissionClient()
+	if err == nil {
+		ctx, cancel := context.WithTimeout(ctx, *timeout)
+		err = transmission.Cleanup(ctx, client, *dryRun, os.Stdout)
+		cancel()
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "transmission-cleanup: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newTransmissionClient() (transmission.Client, error) {
+	return transmission.NewClient(
+		os.Getenv("TRANSMISSION_RPC_URL"),
+		os.Getenv("TRANSMISSION_RPC_USERNAME"),
+		os.Getenv("TRANSMISSION_RPC_PASSWORD"),
+	)
 }
