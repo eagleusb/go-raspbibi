@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+	"sync"
 
 	"github.com/eagleusb/go-raspbibi/internal/chown"
 )
@@ -18,7 +19,7 @@ func init() {
 func runChown(ctx context.Context) {
 	fs := flag.NewFlagSet("chown", flag.ExitOnError)
 	path := fs.String("path", ".", "Target directory")
-	username := fs.String("user", "debian-transmission", "Owner username")
+	username := fs.String("user", "jellyfin", "Owner username")
 	groupname := fs.String("group", "jellyfin", "Shared group name")
 	dryRun := fs.Bool("dry-run", false, "Show what would happen without making changes")
 	fs.Parse(os.Args[1:])
@@ -34,15 +35,9 @@ func runChown(ctx context.Context) {
 		os.Exit(1)
 	}
 
-	// Resolve UID
-	u, err := user.Lookup(*username)
+	uid, err := lookupChownUID(*username)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	uid, err := strconv.Atoi(u.Uid)
-	if err != nil {
-		fmt.Printf("Error: invalid UID %q for user %s\n", u.Uid, *username)
 		os.Exit(1)
 	}
 
@@ -64,9 +59,26 @@ func runChown(ctx context.Context) {
 		GID:    gid,
 		DryRun: *dryRun,
 	}
+	if *username == "jellyfin" {
+		cfg.ResolvePartialUID = sync.OnceValues(func() (int, error) {
+			return lookupChownUID("debian-transmission")
+		})
+	}
 
 	if err := chown.Run(ctx, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func lookupChownUID(username string) (int, error) {
+	u, err := user.Lookup(username)
+	if err != nil {
+		return 0, err
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return 0, fmt.Errorf("invalid UID %q for user %s", u.Uid, username)
+	}
+	return uid, nil
 }

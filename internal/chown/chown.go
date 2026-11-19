@@ -19,6 +19,8 @@ type Config struct {
 	UID    int
 	GID    int
 	DryRun bool
+	// ResolvePartialUID optionally selects the owner of regular .part files.
+	ResolvePartialUID func() (int, error)
 }
 
 // Run reconciles ownership and shared access under cfg.Path.
@@ -90,17 +92,25 @@ func walk(ctx context.Context, cfg Config, fd int, path string) error {
 func ensureSharedAccess(cfg Config, fd int, path string, stat unix.Stat_t) error {
 	const modeBits = 07777
 	var required uint32
+	uid := cfg.UID
 	switch stat.Mode & unix.S_IFMT {
 	case unix.S_IFDIR:
 		required = 0770 | unix.S_ISGID
 	case unix.S_IFREG:
 		required = 0660
+		if cfg.ResolvePartialUID != nil && strings.HasSuffix(path, ".part") {
+			var err error
+			uid, err = cfg.ResolvePartialUID()
+			if err != nil {
+				return fmt.Errorf("resolve partial file owner for %q: %w", path, err)
+			}
+		}
 	}
 	mode := uint32(stat.Mode) & modeBits
-	changeOwner := int(stat.Uid) != cfg.UID || int(stat.Gid) != cfg.GID
+	changeOwner := int(stat.Uid) != uid || int(stat.Gid) != cfg.GID
 	if cfg.DryRun {
 		if changeOwner {
-			fmt.Printf("[DRY-RUN] Would chown: %s (%d:%d)\n", path, cfg.UID, cfg.GID)
+			fmt.Printf("[DRY-RUN] Would chown: %s (%d:%d)\n", path, uid, cfg.GID)
 		}
 		if mode&required != required {
 			fmt.Printf("[DRY-RUN] Would chmod: %s (%04o)\n", path, mode|required)
@@ -108,10 +118,10 @@ func ensureSharedAccess(cfg Config, fd int, path string, stat unix.Stat_t) error
 		return nil
 	}
 	if changeOwner {
-		if err := unix.Fchownat(fd, "", cfg.UID, cfg.GID, unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if err := unix.Fchownat(fd, "", uid, cfg.GID, unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return fmt.Errorf("chown %q: %w", path, err)
 		}
-		fmt.Printf("Chown: %s (%d:%d)\n", path, cfg.UID, cfg.GID)
+		fmt.Printf("Chown: %s (%d:%d)\n", path, uid, cfg.GID)
 		// Use the post-chown mode because changing ownership can clear mode bits.
 		if err := unix.Fstat(fd, &stat); err != nil {
 			return fmt.Errorf("stat %q after chown: %w", path, err)
