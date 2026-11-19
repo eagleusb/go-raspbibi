@@ -103,6 +103,55 @@ func TestWalkUsesPinnedDirectory(t *testing.T) {
 	}
 }
 
+func TestPartialFileKeepsTransmissionOwner(t *testing.T) {
+	root := t.TempDir()
+	partial := filepath.Join(root, "movie.mkv.part")
+	if err := os.WriteFile(partial, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := unix.Open(partial, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		t.Fatal(err)
+	}
+	partialUID := int(stat.Uid)
+	cfg := Config{
+		Path: root,
+		UID:  partialUID + 1,
+		GID:  int(stat.Gid),
+		ResolvePartialUID: func() (int, error) {
+			return partialUID, nil
+		},
+	}
+	if err := ensureSharedAccess(cfg, fd, partial, stat); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Fstat(fd, &stat); err != nil {
+		t.Fatal(err)
+	}
+	if int(stat.Uid) != partialUID || stat.Mode&0777 != 0660 {
+		t.Fatalf("partial file has UID %d and mode %04o, want UID %d and mode 0660", stat.Uid, stat.Mode&0777, partialUID)
+	}
+	if err := os.Rename(partial, filepath.Join(root, "movie.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "directory.part"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg.DryRun = true
+	cfg.ResolvePartialUID = func() (int, error) {
+		t.Fatal("finished files and directories should use the regular owner")
+		return 0, nil
+	}
+	if err := Run(t.Context(), cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunEnsuresSharedPermissions(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
