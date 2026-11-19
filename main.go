@@ -26,7 +26,7 @@ func main() {
 		name = os.Args[1]
 		os.Args = os.Args[1:]
 	} else if os.Getenv("TR_APP_VERSION") != "" {
-		name = "transmission-route"
+		name = "route"
 	} else {
 		fmt.Println("Usage: raspbibi <feature> [options]")
 		fmt.Println("Features:", featureList())

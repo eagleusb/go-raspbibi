@@ -22,7 +22,7 @@ const sessionHeader = "X-Transmission-Session-Id"
 const DefaultRPCURL = "http://127.0.0.1:9091/transmission/rpc"
 const maxRPCResponseBytes = 1 << 20
 
-// Client wraps the Transmission RPC operations used by routing and cleanup.
+// Client wraps the Transmission RPC operations used by routing and pruning.
 type Client struct {
 	rpc *transmissionrpc.Client
 }
@@ -85,8 +85,8 @@ func (t rpcTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusConflict {
-		// Cleanup's numeric IDs are valid only within the session that listed
-		// them. Routing uses hashes and can retry against a new session.
+		// Pruning uses numeric IDs that are valid only within the session that
+		// listed them. Routing uses hashes and can retry against a new session.
 		if req.Header.Get(sessionHeader) != "" && req.Context().Value(numericTorrentIDsKey{}) == true {
 			resp.Body.Close()
 			return nil, fmt.Errorf("Transmission RPC session was rejected")
