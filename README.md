@@ -24,12 +24,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags osusergo -o bin/raspb
 ```
 
 Replace `bin/raspbibi` below if you cross-built.
+If upgrading an existing hook, stop Transmission before replacing the binary.
 
 ```sh
 sudo install -m 0755 bin/raspbibi /usr/local/bin/raspbibi
-sudo install -d -m 0755 /etc/raspbibi
-sudo install -m 0644 examples/transmission-route.json /etc/raspbibi/transmission-route.json
-sudo install -m 0755 examples/transmission-route-hook.sh /usr/local/bin/raspbibi-transmission-route
 ```
 
 #### Enable the hook
@@ -47,26 +45,29 @@ Merge these settings into the file.
 {
   "rpc-enabled": true,
   "script-torrent-added-enabled": true,
-  "script-torrent-added-filename": "/usr/local/bin/raspbibi-transmission-route"
+  "script-torrent-added-filename": "/usr/local/bin/raspbibi"
 }
 ```
 
-- The launcher runs as the Transmission service account.
+- The binary runs as the Transmission service account.
 - Mount the media filesystems and create writable destination directories.
-- Set `rpc_url` in `/etc/raspbibi/transmission-route.json` if the endpoint differs
-  from `http://127.0.0.1:9091/transmission/rpc`.
+- RPC defaults to `http://127.0.0.1:9091/transmission/rpc` without authentication.
 
-#### RPC authentication
+#### Optional remote RPC
 
-If enabled, put the original RPC password in `/etc/raspbibi/transmission-rpc.env`
-(root-owned, mode `0600`).
+Set `TRANSMISSION_RPC_URL` for a remote endpoint. For a systemd service, put the
+variables in `/etc/raspbibi/transmission.env` (root-owned, mode `0600`).
 
 ```ini
+TRANSMISSION_RPC_URL=https://transmission.example.com/transmission/rpc
 TRANSMISSION_RPC_USERNAME=your-user
 TRANSMISSION_RPC_PASSWORD=your-password
 ```
 
-Authenticated RPC requires HTTPS outside loopback.
+- Set the username and original password only when the server requires authentication.
+  Authenticated RPC requires HTTPS outside loopback.
+- If upgrading, rename `/etc/raspbibi/transmission-rpc.env` to
+  `/etc/raspbibi/transmission.env` and update `EnvironmentFile` before restarting.
 
 #### Share media access with Jellyfin
 
@@ -82,13 +83,13 @@ sudo /usr/local/bin/raspbibi chown -path /mnt/sda/series
 
 #### Start Transmission
 
-If you configured RPC credentials or shared access, run
+If you configured an RPC environment file or shared access, run
 `sudo systemctl edit transmission-daemon` and add the applicable settings.
 
 ```ini
 [Service]
-# RPC authentication
-EnvironmentFile=/etc/raspbibi/transmission-rpc.env
+# Optional RPC configuration
+EnvironmentFile=/etc/raspbibi/transmission.env
 # Shared media access
 SupplementaryGroups=jellyfin
 ```
@@ -99,7 +100,8 @@ sudo systemctl start transmission-daemon
 
 ### Routing rules
 
-Edit `/etc/raspbibi/transmission-route.json`. The first matching rule wins.
+Edit the [built-in rules](internal/transmission/rules.go) and rebuild to change routing.
+The first matching rule wins.
 
 | Match | Destination |
 | --- | --- |
@@ -108,14 +110,14 @@ Edit `/etc/raspbibi/transmission-route.json`. The first matching rule wins.
 | Year such as `1999` or `2024` | `/mnt/sdb/movies-hd` |
 
 - Put exceptions before general rules and use absolute paths.
-- Torrents stay put if no rule matches or the match has an empty or omitted `destination`.
+- Torrents stay put if no rule matches or the match has an empty destination.
 
 ### Preview
 
 ```sh
 TR_TORRENT_NAME='Example.Show.S01E02.1080p' \
 TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
-./bin/raspbibi transmission-route -config examples/transmission-route.json -dry-run
+./bin/raspbibi transmission-route -dry-run
 ```
 
 - Dry-run previews the destination without moving data or calling RPC.

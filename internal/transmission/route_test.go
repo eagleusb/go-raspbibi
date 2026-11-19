@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,20 +17,11 @@ import (
 
 const testHash = "0123456789abcdef0123456789abcdef01234567"
 
-func testConfig(t *testing.T, endpoint, destination string) Config {
-	t.Helper()
-	data, err := json.Marshal(Config{RPCURL: endpoint, Rules: []Rule{
-		{Name: "custom", Pattern: `(?i)custom`},
-		{Name: "series", Pattern: `(?i)s01e02`, Destination: destination},
-	}})
-	if err != nil {
-		t.Fatal(err)
+func testRules(destination string) []routeRule {
+	return []routeRule{
+		{name: "custom", pattern: regexp.MustCompile(`(?i)custom`)},
+		{name: "series", pattern: regexp.MustCompile(`(?i)s01e02`), destination: destination},
 	}
-	cfg, err := LoadConfig(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cfg
 }
 
 func TestRouteThroughRPC(t *testing.T) {
@@ -72,9 +64,9 @@ func TestRouteThroughRPC(t *testing.T) {
 		io.WriteString(w, `{"result":"success","arguments":{}}`)
 	}))
 	defer server.Close()
-	cfg := testConfig(t, server.URL+"/transmission/rpc", destination)
+	client := Client{URL: server.URL + "/transmission/rpc", Username: "raspbibi", Password: "secret"}
 	var output bytes.Buffer
-	err := Run(context.Background(), cfg, Torrent{Name: "Show.S01E02", Hash: testHash}, Client{Username: "raspbibi", Password: "secret"}, false, &output)
+	err := run(context.Background(), testRules(destination), Torrent{Name: "Show.S01E02", Hash: testHash}, client, false, &output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +98,11 @@ func TestRouteDoesNotMutateForSkippedOrInvalidTorrents(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			destination := filepath.Join(t.TempDir(), "must-not-be-created")
-			cfg := testConfig(t, server.URL, destination)
 			torrent := Torrent{Name: tt.torrentName, Hash: tt.hash}
 			if tt.sameDir {
 				torrent.Dir = destination + "/"
 			}
-			err := Run(context.Background(), cfg, torrent, Client{}, tt.dryRun, io.Discard)
+			err := run(context.Background(), testRules(destination), torrent, Client{URL: server.URL}, tt.dryRun, io.Discard)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v; wantErr = %v", err, tt.wantErr)
 			}
@@ -171,9 +162,8 @@ func TestRouteUsesFinalDownloadDirBeforeSkipping(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			cfg := testConfig(t, server.URL, destination)
 			torrent := Torrent{Name: "Show.S01E02", Hash: testHash, Dir: destination}
-			err := Run(context.Background(), cfg, torrent, Client{}, false, io.Discard)
+			err := run(context.Background(), testRules(destination), torrent, Client{URL: server.URL}, false, io.Discard)
 			if (err != nil) != (tt.finalDir == "") || gets.Load() != 1 || moves.Load() != tt.moves {
 				t.Fatalf("error = %v, lookups = %d, moves = %d (want %d)", err, gets.Load(), moves.Load(), tt.moves)
 			}
@@ -186,14 +176,14 @@ func TestRouteRejectsFileDestinationAndCancellation(t *testing.T) {
 	if err := os.WriteFile(destination, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := testConfig(t, DefaultRPCURL, destination)
+	rules := testRules(destination)
 	torrent := Torrent{Name: "Show.S01E02", Hash: testHash}
-	if err := Run(context.Background(), cfg, torrent, Client{}, false, io.Discard); err == nil || !strings.Contains(err.Error(), "not a directory") {
+	if err := run(context.Background(), rules, torrent, Client{}, false, io.Discard); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("expected directory error, got %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Run(ctx, cfg, torrent, Client{}, false, io.Discard); err != context.Canceled {
+	if err := run(ctx, rules, torrent, Client{}, false, io.Discard); err != context.Canceled {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
 }

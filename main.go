@@ -21,21 +21,24 @@ func featureList() string {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	var name string
+	if len(os.Args) > 1 {
+		name = os.Args[1]
+		os.Args = os.Args[1:]
+	} else if os.Getenv("TR_APP_VERSION") != "" {
+		name = "transmission-route"
+	} else {
 		fmt.Println("Usage: raspbibi <feature> [options]")
 		fmt.Println("Features:", featureList())
 		os.Exit(1)
 	}
 
-	name := os.Args[1]
 	run, ok := features[name]
 	if !ok {
 		fmt.Printf("Unknown feature: %s\n", name)
 		fmt.Println("Features:", featureList())
 		os.Exit(1)
 	}
-
-	os.Args = os.Args[1:]
 
 	// Set up global signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

@@ -8,10 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strings"
 )
 
 const sessionHeader = "X-Transmission-Session-Id"
+const DefaultRPCURL = "http://127.0.0.1:9091/transmission/rpc"
 
 type moveArguments struct {
 	IDs      []string `json:"ids"`
@@ -26,6 +29,18 @@ type Client struct {
 	Username string
 	Password string
 	HTTP     *http.Client
+}
+
+// NewClient validates the endpoint or uses the default local RPC URL.
+func NewClient(endpoint, username, password string) (Client, error) {
+	if endpoint == "" {
+		endpoint = DefaultRPCURL
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.ContainsRune(endpoint, '#') {
+		return Client{}, fmt.Errorf("TRANSMISSION_RPC_URL must be an HTTP(S) URL without credentials, query, or fragment")
+	}
+	return Client{URL: endpoint, Username: username, Password: password}, nil
 }
 
 func (c Client) Move(ctx context.Context, hash, destination string) error {
