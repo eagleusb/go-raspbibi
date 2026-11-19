@@ -23,7 +23,6 @@ type moveArguments struct {
 }
 
 // Client uses the legacy RPC protocol supported by Transmission 4.1.0 beta2.
-// It delegates relocation to Transmission, which tracks the new data location.
 type Client struct {
 	URL      string
 	Username string
@@ -64,6 +63,30 @@ func (c Client) DownloadDir(ctx context.Context, hash string) (string, error) {
 		return "", fmt.Errorf("Transmission RPC must return one torrent with an absolute downloadDir")
 	}
 	return result.Torrents[0].DownloadDir, nil
+}
+
+func (c Client) seedTorrents(ctx context.Context) ([]seedTorrent, error) {
+	args := struct {
+		Fields []string `json:"fields"`
+	}{Fields: []string{"name", "hashString", "percentDone", "secondsSeeding", "status"}}
+	var result struct {
+		Torrents []seedTorrent `json:"torrents"`
+	}
+	if err := c.call(ctx, "torrent-get", args, &result); err != nil {
+		return nil, err
+	}
+	if result.Torrents == nil {
+		return nil, fmt.Errorf("Transmission RPC response has no torrents array")
+	}
+	return result.Torrents, nil
+}
+
+func (c Client) removeTorrents(ctx context.Context, hashes []string) error {
+	args := struct {
+		IDs             []string `json:"ids"`
+		DeleteLocalData bool     `json:"delete-local-data"`
+	}{IDs: hashes, DeleteLocalData: false}
+	return c.call(ctx, "torrent-remove", args, nil)
 }
 
 func (c Client) call(ctx context.Context, method string, args, result any) error {

@@ -110,6 +110,32 @@ TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
 - **Requested relocation** means Transmission accepted the request. Check Transmission
   before retrying after a timeout. The default is 30 seconds, adjustable with `-timeout`.
 
+### Seeding cleanup
+
+`raspbibi transmission-cleanup` removes completed torrent entries after ten days
+(864,000 seconds) of cumulative seeding. It keeps downloaded files in place.
+Transmission's ratio and idle limits can pause a torrent before it reaches the
+threshold.
+
+```sh
+/usr/local/bin/raspbibi transmission-cleanup -dry-run
+/usr/local/bin/raspbibi transmission-cleanup
+```
+
+Dry-run reads the torrent list over RPC and prints the entries that would be
+removed. The command uses the same `TRANSMISSION_RPC_*` settings as routing and
+allows 30 seconds for the run by default. Adjust that with `-timeout`.
+
+To check hourly, add this line to the crontab of an account with RPC access.
+Provide any required RPC environment variables to the scheduled command.
+
+```cron
+0 * * * * /usr/local/bin/raspbibi transmission-cleanup
+```
+
+Cleanup runs independently of the torrent-added routing hook. A torrent becomes
+eligible on the first check after it reaches the threshold.
+
 ## Chown
 
 Apply shared ownership and permissions to media trees. Jellyfin can read media
