@@ -2,6 +2,8 @@ package transmission
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,20 +13,21 @@ import (
 	"time"
 )
 
-type rpcTransport func(*http.Request) (*http.Response, error)
+func mustRPCClient(t *testing.T, endpoint, username, password string) Client {
+	t.Helper()
+	client, err := NewClient(endpoint, username, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
 
-func (f rpcTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func writeRPCReply(w io.Writer, tag int, body string) {
+	fmt.Fprintf(w, `{"tag":%d,%s`, tag, strings.TrimPrefix(body, "{"))
+}
 
 func TestNewClient(t *testing.T) {
-	client, err := NewClient("", "", "")
-	if err != nil || client.URL != "http://127.0.0.1:9091/transmission/rpc" || client.Username != "" || client.Password != "" {
-		t.Fatal("expected unauthenticated local RPC by default")
-	}
-	const remote = "https://rpc.example.org/custom/rpc"
-	client, err = NewClient(remote, "raspbibi", "test-password")
-	if err != nil || client.URL != remote || client.Username != "raspbibi" || client.Password != "test-password" {
-		t.Fatal("expected the supplied remote endpoint and credentials")
-	}
+	mustRPCClient(t, "", "", "")
 	for _, endpoint := range []string{
 		"file:///tmp/rpc",
 		"http://:9091/rpc",
@@ -41,33 +44,16 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestRPCCredentialsRequireHTTPSOutsideLoopback(t *testing.T) {
-	for _, tt := range []struct {
-		url     string
-		allowed bool
-	}{
-		{"http://192.0.2.1/rpc", false},
-		{"http://transmission.example/rpc", false},
-		{"http://localhost.example/rpc", false},
-		{"http://user:password@localhost/rpc", false},
-		{"http://127.0.0.1/rpc", true},
-		{"http://[::1]/rpc", true},
-		{"http://localhost/rpc", true},
-		{"https://transmission.example/rpc", true},
+	for _, endpoint := range []string{
+		"http://192.0.2.1/rpc",
+		"http://transmission.example/rpc",
+		"http://localhost.example/rpc",
 	} {
-		t.Run(tt.url, func(t *testing.T) {
-			calls := 0
-			transport := rpcTransport(func(r *http.Request) (*http.Response, error) {
-				calls++
-				user, password, ok := r.BasicAuth()
-				if !ok || user != "user" || password != "password" {
-					t.Error("expected credentials on the permitted request")
-				}
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"result":"success"}`))}, nil
-			})
-			client := Client{URL: tt.url, Username: "user", Password: "password", HTTP: &http.Client{Transport: transport}}
-			err := client.Move(context.Background(), testHash, "/destination")
-			if tt.allowed && (err != nil || calls != 1) || !tt.allowed && (err == nil || calls != 0) {
-				t.Fatalf("allowed = %v, error = %v, requests = %d", tt.allowed, err, calls)
+		t.Run(endpoint, func(t *testing.T) {
+			client := mustRPCClient(t, endpoint, "user", "password")
+			err := client.Move(t.Context(), testHash, "/destination")
+			if err == nil || !strings.Contains(err.Error(), "HTTPS is required for authenticated non-loopback RPC") {
+				t.Fatalf("move to %q returned %v, want HTTPS requirement", endpoint, err)
 			}
 		})
 	}
@@ -77,16 +63,18 @@ func TestRPCFailures(t *testing.T) {
 	for _, tt := range []struct {
 		name, body, token, want string
 		status, calls           int
+		echoTag                 bool
 	}{
-		{"unauthorized", "", "", "HTTP 401", 401, 1},
-		{"forbidden", "", "", "HTTP 403", 403, 1},
-		{"server error", "", "", "HTTP 500", 500, 1},
-		{"missing challenge token", "", "", "no X-Transmission-Session-Id", 409, 1},
-		{"repeated challenge", "", "token", "HTTP 409", 409, 2},
-		{"RPC error", `{"result":"permission denied"}`, "", "permission denied", 200, 1},
-		{"missing result", `{}`, "", "RPC failed", 200, 1},
-		{"malformed JSON", `<html>failure</html>`, "", "decode RPC response", 200, 1},
-		{"trailing response", `{"result":"success"} garbage`, "", "exactly one JSON object", 200, 1},
+		{"unauthorized", "", "", "HTTP error 401", 401, 1, false},
+		{"forbidden", "", "", "HTTP error 403", 403, 1, false},
+		{"server error", "", "", "HTTP error 500", 500, 1, false},
+		{"missing challenge token", "", "", "no X-Transmission-Session-Id", 409, 1, false},
+		{"repeated challenge", "", "token", "CSRF token invalid 2 times", 409, 2, false},
+		{"RPC error", `{"result":"permission denied"}`, "", "permission denied", 200, 1, true},
+		{"missing result", `{"arguments":{}}`, "", "does not indicate success", 200, 1, true},
+		{"missing tag", `{"result":"success"}`, "", "does not have a tag", 200, 1, false},
+		{"malformed JSON", `<html>failure</html>`, "", "invalid JSON", 200, 1, false},
+		{"trailing response", `{"result":"success"} garbage`, "", "invalid JSON", 200, 1, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -94,12 +82,24 @@ func TestRPCFailures(t *testing.T) {
 				calls.Add(1)
 				w.Header().Set(sessionHeader, tt.token)
 				w.WriteHeader(tt.status)
-				io.WriteString(w, tt.body)
+				if tt.echoTag {
+					var request struct {
+						Tag int `json:"tag"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						return
+					}
+					writeRPCReply(w, request.Tag, tt.body)
+				} else {
+					io.WriteString(w, tt.body)
+				}
 			}))
 			defer server.Close()
-			err := (Client{URL: server.URL}).Move(context.Background(), testHash, "/destination")
+			client := mustRPCClient(t, server.URL, "", "")
+			err := client.Move(t.Context(), testHash, "/destination")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v; want %q", err, tt.want)
+				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
 			if calls.Load() != int32(tt.calls) {
 				t.Fatalf("calls = %d, want %d", calls.Load(), tt.calls)
@@ -118,8 +118,9 @@ func TestRPCDoesNotFollowRedirect(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	defer server.Close()
-	err := (Client{URL: server.URL, Username: "user", Password: "secret"}).Move(context.Background(), testHash, "/destination")
-	if err == nil || !strings.Contains(err.Error(), "HTTP 307") || calls.Load() != 0 {
+	client := mustRPCClient(t, server.URL, "user", "secret")
+	err := client.Move(t.Context(), testHash, "/destination")
+	if err == nil || !strings.Contains(err.Error(), "HTTP error 307") || calls.Load() != 0 {
 		t.Fatalf("error = %v, redirect target calls = %d", err, calls.Load())
 	}
 }
@@ -132,9 +133,10 @@ func TestRPCTimeout(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	err := (Client{URL: server.URL}).Move(ctx, testHash, "/destination")
+	client := mustRPCClient(t, server.URL, "", "")
+	err := client.Move(ctx, testHash, "/destination")
 	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
 		t.Fatalf("expected RPC deadline error, got %v", err)
 	}

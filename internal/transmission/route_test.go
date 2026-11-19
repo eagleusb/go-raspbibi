@@ -41,6 +41,7 @@ func TestRouteThroughRPC(t *testing.T) {
 		}
 		var request struct {
 			Method    string `json:"method"`
+			Tag       int    `json:"tag"`
 			Arguments struct {
 				IDs      []string `json:"ids"`
 				Location string   `json:"location"`
@@ -61,10 +62,10 @@ func TestRouteThroughRPC(t *testing.T) {
 		if r.Header.Get(sessionHeader) != "session-token" {
 			t.Error("missing session token on retry")
 		}
-		io.WriteString(w, `{"result":"success","arguments":{}}`)
+		writeRPCReply(w, request.Tag, `{"result":"success","arguments":{}}`)
 	}))
 	defer server.Close()
-	client := Client{URL: server.URL + "/transmission/rpc", Username: "raspbibi", Password: "secret"}
+	client := mustRPCClient(t, server.URL+"/transmission/rpc", "raspbibi", "secret")
 	var output bytes.Buffer
 	err := run(context.Background(), testRules(destination), Torrent{Name: "Show.S01E02", Hash: testHash}, client, false, &output)
 	if err != nil {
@@ -102,7 +103,8 @@ func TestRouteDoesNotMutateForSkippedOrInvalidTorrents(t *testing.T) {
 			if tt.sameDir {
 				torrent.Dir = destination + "/"
 			}
-			err := run(context.Background(), testRules(destination), torrent, Client{URL: server.URL}, tt.dryRun, io.Discard)
+			client := mustRPCClient(t, server.URL, "", "")
+			err := run(context.Background(), testRules(destination), torrent, client, tt.dryRun, io.Discard)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v; wantErr = %v", err, tt.wantErr)
 			}
@@ -121,19 +123,30 @@ func TestRouteUsesFinalDownloadDirBeforeSkipping(t *testing.T) {
 	for _, tt := range []struct {
 		name, finalDir string
 		moves          int32
+		refreshSession bool
 	}{
-		{"already routed", destination + "/", 0},
-		{"current directory is incomplete", t.TempDir(), 1},
-		{"missing download directory", "", 0},
+		{"already routed", destination + "/", 0, false},
+		{"current directory is incomplete", t.TempDir(), 1, false},
+		{"session refresh before move", t.TempDir(), 2, true},
+		{"missing download directory", "", 0, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var gets, moves atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				token := r.Header.Get(sessionHeader)
+				if token == "" {
+					w.Header().Set(sessionHeader, "initial")
+					w.WriteHeader(http.StatusConflict)
+					return
+				}
 				var request struct {
 					Method    string `json:"method"`
+					Tag       int    `json:"tag"`
 					Arguments struct {
-						moveArguments
-						Fields []string `json:"fields"`
+						IDs      []string `json:"ids"`
+						Location string   `json:"location"`
+						Move     bool     `json:"move"`
+						Fields   []string `json:"fields"`
 					} `json:"arguments"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -148,26 +161,53 @@ func TestRouteUsesFinalDownloadDirBeforeSkipping(t *testing.T) {
 					if fields := request.Arguments.Fields; len(fields) != 1 || fields[0] != "downloadDir" {
 						t.Errorf("unexpected fields: %v", fields)
 					}
-					io.WriteString(w, `{"result":"success","arguments":{"torrents":[{"downloadDir":`)
-					json.NewEncoder(w).Encode(tt.finalDir)
-					io.WriteString(w, `}]}}`)
+					directory, err := json.Marshal(tt.finalDir)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					writeRPCReply(w, request.Tag, `{"result":"success","arguments":{"torrents":[{"downloadDir":`+string(directory)+`}]}}`)
 				case "torrent-set-location":
 					moves.Add(1)
 					if gets.Load() != 1 || request.Arguments.Location != destination || !request.Arguments.Move {
 						t.Errorf("unexpected relocation: %+v", request.Arguments)
 					}
-					io.WriteString(w, `{"result":"success"}`)
+					if tt.refreshSession {
+						if token == "initial" {
+							w.Header().Set(sessionHeader, "refreshed")
+							w.WriteHeader(http.StatusConflict)
+							return
+						}
+						if token != "refreshed" {
+							t.Errorf("move used token %q, want refreshed", token)
+						}
+					}
+					writeRPCReply(w, request.Tag, `{"result":"success"}`)
 				default:
 					t.Errorf("unexpected method: %q", request.Method)
 				}
 			}))
 			defer server.Close()
 			torrent := Torrent{Name: "Show.S01E02", Hash: testHash, Dir: destination}
-			err := run(context.Background(), testRules(destination), torrent, Client{URL: server.URL}, false, io.Discard)
+			client := mustRPCClient(t, server.URL, "", "")
+			err := run(context.Background(), testRules(destination), torrent, client, false, io.Discard)
 			if (err != nil) != (tt.finalDir == "") || gets.Load() != 1 || moves.Load() != tt.moves {
 				t.Fatalf("error = %v, lookups = %d, moves = %d (want %d)", err, gets.Load(), moves.Load(), tt.moves)
 			}
 		})
+	}
+}
+
+func TestRoutePreviewsWithRemoteHTTPCredentials(t *testing.T) {
+	client := mustRPCClient(t, "http://transmission.example/rpc", "user", "password")
+	destination := filepath.Join(t.TempDir(), "series")
+	var output bytes.Buffer
+	torrent := Torrent{Name: "Show.S01E02", Hash: testHash}
+	if err := run(t.Context(), testRules(destination), torrent, client, true, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), destination) {
+		t.Errorf("preview = %q, want destination %q", output.String(), destination)
 	}
 }
 
