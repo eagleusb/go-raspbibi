@@ -122,19 +122,11 @@ threshold.
 /usr/local/bin/raspbibi prune
 ```
 
-Dry-run reads the torrent list over RPC and prints the entries that would be
-removed. The command uses the same `TRANSMISSION_RPC_*` settings as routing and
-allows 30 seconds for the run by default. Adjust that with `-timeout`.
-
-To check hourly, add this line to the crontab of an account with RPC access.
-Provide any required RPC environment variables to the scheduled command.
+> daily cron at 03:00
 
 ```cron
-0 * * * * /usr/local/bin/raspbibi prune
+0 3 * * * /usr/local/bin/raspbibi prune
 ```
-
-Cleanup runs independently of the torrent-added routing hook. A torrent becomes
-eligible on the first check after it reaches the threshold.
 
 ## Chown
 
@@ -161,10 +153,10 @@ sudo /usr/local/bin/raspbibi chown -path /srv/media -dry-run
 - Set `"umask": "002"` in Transmission's `settings.json` for group-writable
   downloads. If Jellyfin creates shared files, set `UMask=0002` in its service.
 
-> daily cron at 03:00
+> daily cron at 04:00
 
 ```cron
-0 3 * * * /usr/local/bin/raspbibi chown -path /srv/media
+0 4 * * * /usr/local/bin/raspbibi chown -path /srv/media
 ```
 
 ## Mover
