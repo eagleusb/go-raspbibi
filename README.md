@@ -24,7 +24,6 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags osusergo -o bin/raspb
 ```
 
 Replace `bin/raspbibi` below if you cross-built.
-If upgrading an existing hook, stop Transmission before replacing the binary.
 
 ```sh
 sudo install -m 0755 bin/raspbibi /usr/local/bin/raspbibi
@@ -66,32 +65,16 @@ TRANSMISSION_RPC_PASSWORD=your-password
 
 - Set the username and original password only when the server requires authentication.
   Authenticated RPC requires HTTPS outside loopback.
-- If upgrading, rename `/etc/raspbibi/transmission-rpc.env` to
-  `/etc/raspbibi/transmission.env` and update `EnvironmentFile` before restarting.
-
-#### Share media access with Jellyfin
-
-Apply [shared ownership and permissions](#chown) to each media tree, including
-download and incomplete directories.
-
-```sh
-sudo /usr/local/bin/raspbibi chown -path /mnt/sda/series
-```
-
-- Set `"umask": "002"` in Transmission's `settings.json` for group-writable downloads.
-- If Jellyfin creates shared files, set `UMask=0002` in its service.
 
 #### Start Transmission
 
-If you configured an RPC environment file or shared access, run
-`sudo systemctl edit transmission-daemon` and add the applicable settings.
+For shared media, configure [ownership and permissions](#chown) before starting
+Transmission. If you configured an RPC environment file, add it with
+`sudo systemctl edit transmission-daemon`.
 
 ```ini
 [Service]
-# Optional RPC configuration
 EnvironmentFile=/etc/raspbibi/transmission.env
-# Shared media access
-SupplementaryGroups=jellyfin
 ```
 
 ```sh
@@ -129,20 +112,30 @@ TR_TORRENT_HASH='0123456789abcdef0123456789abcdef01234567' \
 
 ## Chown
 
-Maintain shared ownership and permissions recursively.
+Apply shared ownership and permissions to media trees. Jellyfin can read media
+and delete entries from writable parent directories.
 
 ```sh
 sudo /usr/local/bin/raspbibi chown -path /srv/media -dry-run
 ```
 
-- Defaults are `-path .`, `-user debian-transmission`, and `-group jellyfin`.
+- Defaults are `-path .`, `-user jellyfin`, and `-group jellyfin`.
+- With `-user jellyfin`, regular `.part` files belong to `debian-transmission` so
+  Transmission can rename them on completion. Keep `"rename-partial-files": true`
+  in Transmission's `settings.json` for trees that mix active and completed downloads.
+- For a dedicated incomplete directory, run
+  `sudo /usr/local/bin/raspbibi chown -path /path/to/incomplete -user debian-transmission`
+  separately and keep it outside the Jellyfin ownership sweep.
 - Files get owner and group read/write access. Directories also get search access
   and setgid so new entries inherit the group.
 - Remove `-dry-run` to apply changes. Runs report changes and errors.
+- Give `debian-transmission` access through the `jellyfin` group. If needed, use
+  `sudo systemctl edit transmission-daemon` to add `SupplementaryGroups=jellyfin`
+  under `[Service]`.
+- Set `"umask": "002"` in Transmission's `settings.json` for group-writable
+  downloads. If Jellyfin creates shared files, set `UMask=0002` in its service.
 
-### Daily maintenance
-
-Example root crontab entry, daily at 03:00.
+> daily cron at 03:00
 
 ```cron
 0 3 * * * /usr/local/bin/raspbibi chown -path /srv/media
